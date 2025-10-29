@@ -59,9 +59,6 @@ std::string Docmasys::CAS::Identify(const fs::path &file)
   return ::CloseHash(md);
 }
 
-/// @brief
-/// @param file
-/// @return
 std::string Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
 {
 
