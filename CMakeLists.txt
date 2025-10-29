@@ -5,11 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_library(DocmasysCAS src/CAS.cpp)
+target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
+
+
 # --- Source files
 add_executable(Docmasys
     src/main.cpp
-    src/Cache.cpp
-    src/Cache.h
+    src/CAS.cpp
+    src/CAS.hpp
 )
 
 # OpenSSL
@@ -21,6 +25,15 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 target_link_libraries(Docmasys PRIVATE PkgConfig::ZSTD)
 
+target_link_libraries(DocmasysCAS
+  PUBLIC
+    OpenSSL::Crypto
+    PkgConfig::ZSTD
+)
+
+# Add tests
+enable_testing()
+add_subdirectory(src/tests)
 
 # --- Platform specifics
 if(MSVC)
