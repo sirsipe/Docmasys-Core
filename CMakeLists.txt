@@ -11,9 +11,9 @@ target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # --- Source files
 add_executable(Docmasys
-    src/main.cpp
     src/CAS.cpp
-    src/CAS.hpp
+    src/DB.cpp
+    src/main.cpp
 )
 
 # OpenSSL
@@ -24,6 +24,10 @@ target_link_libraries(Docmasys PRIVATE OpenSSL::Crypto)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 target_link_libraries(Docmasys PRIVATE PkgConfig::ZSTD)
+
+# SQLite
+find_package(SQLite3 REQUIRED)
+target_link_libraries(Docmasys PRIVATE SQLite::SQLite3)
 
 target_link_libraries(DocmasysCAS
   PUBLIC
