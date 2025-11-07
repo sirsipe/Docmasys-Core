@@ -1,30 +1,34 @@
 #include "CAS.hpp"
+
 #include <fstream>
 #include <openssl/evp.h>
 #include <vector>
 #include <zstd.h>
 #include <random>
 #include <thread>
+#include <algorithm>
 
 namespace fs = std::filesystem;
+using namespace Docmasys;
 
 /// @brief Private helper declarations
 namespace
 {
 
-  [[nodiscard]] std::string ToHex(const unsigned char *d, size_t n);
   [[nodiscard]] EVP_MD_CTX *InitHash();
   void UpdateHash(EVP_MD_CTX *md, const char *data, size_t len);
-  [[nodiscard]] std::string CloseHash(EVP_MD_CTX *md);
+
+  [[nodiscard]] Identity CloseHash(EVP_MD_CTX *md);
 
   inline std::filesystem::path ObjectStore(const std::filesystem::path &root) noexcept
   {
     return root / "Objects";
   }
 
-  inline const std::filesystem::path CASLocation(const std::filesystem::path &objectStore, const std::string &identity) noexcept
+  inline const std::filesystem::path CASLocation(const std::filesystem::path &objectStore, const Identity &identity) noexcept
   {
-    return objectStore / identity.substr(0, 2) / identity.substr(2, 2) / identity;
+    auto identityStr = Docmasys::CAS::ToHexString(identity);
+    return objectStore / identityStr.substr(0, 2) / identityStr.substr(2, 2) / identityStr;
   }
 
   inline uint64_t Rand64() noexcept
@@ -36,7 +40,7 @@ namespace
   }
 }
 
-std::string Docmasys::CAS::Identify(const fs::path &file)
+Identity Docmasys::CAS::Identify(const fs::path &file)
 {
   std::ifstream in(file, std::ios::binary);
   if (!in)
@@ -59,7 +63,7 @@ std::string Docmasys::CAS::Identify(const fs::path &file)
   return ::CloseHash(md);
 }
 
-std::string Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
+Identity Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
 {
 
   std::ifstream in(file, std::ios::binary);
@@ -164,9 +168,9 @@ std::string Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
   out.flush();
   ZSTD_freeCCtx(cctx);
 
-  std::string hash = ::CloseHash(md);
+  auto identity = ::CloseHash(md);
 
-  fs::path objPath = ::CASLocation(objStore, hash);
+  fs::path objPath = ::CASLocation(objStore, identity);
   fs::create_directories(objPath.parent_path());
 
   // Atomic install: try rename; if target already exists, drop temp
@@ -187,10 +191,10 @@ std::string Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
     }
   }
 
-  return hash;
+  return identity;
 }
 
-void Docmasys::CAS::Retrieve(const fs::path &root, const std::string &identity, const std::filesystem::path &outFile)
+void Docmasys::CAS::Retrieve(const fs::path &root, const Identity &identity, const std::filesystem::path &outFile)
 {
 
   const fs::path obj = ::CASLocation(ObjectStore(root), identity);
@@ -328,7 +332,7 @@ void Docmasys::CAS::Retrieve(const fs::path &root, const std::string &identity, 
   }
 }
 
-void Docmasys::CAS::Delete(const fs::path &root, const std::string &identity)
+void Docmasys::CAS::Delete(const fs::path &root, const Identity &identity)
 {
   const fs::path objectStore = ObjectStore(root);
   const fs::path obj = ::CASLocation(objectStore, identity);
@@ -355,6 +359,15 @@ void Docmasys::CAS::Delete(const fs::path &root, const std::string &identity)
   }
 }
 
+std::string Docmasys::CAS::ToHexString(const Identity &identity)
+{
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (std::int8_t byte : identity)
+    oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(byte));
+  return oss.str();
+}
+
 namespace
 {
   EVP_MD_CTX *InitHash()
@@ -378,7 +391,7 @@ namespace
       throw std::runtime_error("EVP_DigestUpdate failed");
   }
 
-  std::string CloseHash(EVP_MD_CTX *md)
+  Identity CloseHash(EVP_MD_CTX *md)
   {
     // finalize hash
     unsigned char mdBuf[EVP_MAX_MD_SIZE];
@@ -390,22 +403,9 @@ namespace
     }
     EVP_MD_CTX_free(md);
 
-    return ::ToHex(mdBuf, mdLen);
-  }
+    Identity out{};
 
-  std::string ToHex(const unsigned char *d, size_t n)
-  {
-    static const char *H = "0123456789abcdef";
-
-    std::string s;
-    s.resize(n * 2);
-
-    for (size_t i = 0; i < n; i++)
-    {
-      s[2 * i] = H[(d[i] >> 4) & 0xF];
-      s[2 * i + 1] = H[d[i] & 0xF];
-    }
-
-    return s;
+    std::copy_n(mdBuf, std::min(std::tuple_size_v<Identity>, static_cast<size_t>(mdLen)), out.begin());
+    return out;
   }
 }

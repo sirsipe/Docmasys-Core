@@ -5,14 +5,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(DocmasysCAS src/CAS.cpp)
-target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
+add_library(DocmasysCAS 
+  src/CAS/CAS.cpp
+)
 
+target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # --- Source files
 add_executable(Docmasys
-    src/CAS.cpp
-    src/DB.cpp
+    src/CAS/CAS.cpp
+    src/DB/Database.cpp
+    src/Vault.cpp
     src/main.cpp
 )
 

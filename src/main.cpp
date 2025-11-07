@@ -1,6 +1,6 @@
-#include "CAS.hpp"
 #include <iostream>
 #include <unordered_map>
+#include "Vault.hpp"
 
 /// @brief Parse command line arguments to easy-to-use map.
 /// @param argc count of the arguments
@@ -26,9 +26,8 @@ std::unordered_map<std::string_view, std::string_view> parseArgs(int argc, char 
 void Usage(std::string programName)
 {
   std::cout << "USAGE:" << std::endl;
-  std::cout << " - Upload:   " << programName << " --cache <path_to_cache_folder> --upload <local_source>" << std::endl;
-  std::cout << " - Download: " << programName << " --cache <path_to_cache_folder> --download <local_destination> --hash <hash>" << std::endl;
-  std::cout << " - Identify: " << programName << " --identify <local_source>" << std::endl;
+  std::cout << " - Push <local_folder> to archive:   " << programName << " --archive <path_to_archive> --push <local_folder>" << std::endl;
+  std::cout << " - Pop archive to <local_folder>:   " << programName << " --archive <path_to_archive> --pop <local_folder>" << std::endl;
 }
 
 int main(int argc, char *argv[])
@@ -36,27 +35,28 @@ int main(int argc, char *argv[])
 
   auto args = parseArgs(argc, argv);
 
-  if (args.contains("identify"))
-  {
-    std::cout << Docmasys::CAS::Identify(args["identify"]) << std::endl;
-    return 0;
-  }
-  else if (args.contains("cache") && args.contains("upload"))
-  {
-    auto sha256 = Docmasys::CAS::Store(args["cache"], args["upload"]);
-    std::cout << sha256 << std::endl;
-    return 0;
-  }
-  else if (args.contains("cache") && args.contains("download") && args.contains("hash"))
-  {
-    Docmasys::CAS::Retrieve(args["cache"], std::string(args["hash"]), args["download"]);
-    return 0;
-  }
-  else
+  if (!args.contains("archive"))
   {
     Usage(argv[0]);
     return 1;
   }
 
+  if (args.contains("push"))
+  {
+    auto vault = std::make_unique<Docmasys::Vault>(
+        args["push"],
+        args["archive"]);
+
+    vault->Push();
+  }
+
+  if (args.contains("pop"))
+  {
+    auto vault = std::make_unique<Docmasys::Vault>(
+        args["pop"],
+        args["archive"]);
+
+    vault->Pop();
+  }
   return 0;
 }

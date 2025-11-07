@@ -7,7 +7,7 @@
 #include <vector>
 #include <atomic>
 
-#include "../CAS.hpp" // your header
+#include "../CAS/CAS.hpp" // your header
 
 namespace fs = std::filesystem;
 
@@ -94,7 +94,8 @@ TEST(CAS, Store_And_Retrieve_Roundtrip)
   EXPECT_EQ(got, data);
 
   // Verify object exists in vault
-  fs::path obj = root / "Objects" / id.substr(0, 2) / id.substr(2, 2) / id;
+  auto idStr = Docmasys::CAS::ToHexString(id);
+  fs::path obj = root / "Objects" / idStr.substr(0, 2) / idStr.substr(2, 2) / idStr;
   EXPECT_TRUE(fs::exists(obj));
 }
 
@@ -108,12 +109,13 @@ TEST(CAS, Delete_RemovesObject_And_CleansEmptyParents)
   MakeFile(src, "hello world");
 
   auto id = Docmasys::CAS::Store(root, src);
+  auto idStr = Docmasys::CAS::ToHexString(id);
 
   // paths
   auto objStore = root / "Objects";
-  auto d1 = objStore / id.substr(0, 2);
-  auto d2 = d1 / id.substr(2, 2);
-  auto obj = d2 / id;
+  auto d1 = objStore / idStr.substr(0, 2);
+  auto d2 = d1 / idStr.substr(2, 2);
+  auto obj = d2 / idStr;
 
   ASSERT_TRUE(fs::exists(obj));
 
@@ -140,7 +142,7 @@ TEST(CAS, Store_SameIdentity_FromManyThreads_IsIdempotent)
   MakeFile(src, data);
 
   const int N = 16;
-  std::vector<std::future<std::string>> futs;
+  std::vector<std::future<std::array<uint8_t, 32>>> futs;
   futs.reserve(N);
   for (int i = 0; i < N; ++i)
   {
@@ -148,7 +150,7 @@ TEST(CAS, Store_SameIdentity_FromManyThreads_IsIdempotent)
                                  { return Docmasys::CAS::Store(root, src); }));
   }
 
-  std::vector<std::string> ids;
+  std::vector<std::array<uint8_t, 32>> ids;
   ids.reserve(N);
   for (auto &f : futs)
     ids.push_back(f.get());
@@ -157,7 +159,8 @@ TEST(CAS, Store_SameIdentity_FromManyThreads_IsIdempotent)
   for (int i = 1; i < N; ++i)
     EXPECT_EQ(ids[i], ids[0]);
   auto id = ids[0];
-  auto obj = root / "Objects" / id.substr(0, 2) / id.substr(2, 2) / id;
+  auto idstr = Docmasys::CAS::ToHexString(id);
+  auto obj = root / "Objects" / idstr.substr(0, 2) / idstr.substr(2, 2) / idstr;
   EXPECT_TRUE(fs::exists(obj));
 
   // Ensure only the final file exists (no temp leftovers under Objects)
