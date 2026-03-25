@@ -5,6 +5,8 @@ Small document vault prototype with:
 - SQLite metadata
 - verb-based CLI
 - lightweight file version tracking and relations
+- per-version typed properties
+- import-time extension hooks
 
 ## Build
 
@@ -23,18 +25,24 @@ cmake --build build
 The CLI now prefers verbs over the old flag soup.
 
 ```text
-Docmasys import   --archive <archive> --root <folder>
-Docmasys get      --archive <archive> --ref <path[@version]> [--out <folder>] [--scope none|strong|strong+weak|all]
-Docmasys versions --archive <archive> --path <path>
-Docmasys relate   --archive <archive> --from <path[@version]> --to <path[@version]> --type strong|weak|optional
+Docmasys import    --archive <archive> --root <folder>
+Docmasys get       --archive <archive> --ref <path[@version]> [--out <folder>] [--scope none|strong|strong+weak|all]
+Docmasys versions  --archive <archive> --path <path>
+Docmasys relate    --archive <archive> --from <path[@version]> --to <path[@version]> --type strong|weak|optional
 Docmasys relations --archive <archive> --ref <path[@version]> [--type strong|weak|optional|all]
-Docmasys inspect  --archive <archive> [--root <folder>]
+Docmasys props list   --archive <archive> --ref <path[@version]>
+Docmasys props get    --archive <archive> --ref <path[@version]> --name <property>
+Docmasys props set    --archive <archive> --ref <path[@version]> --name <property> --type string|int|bool --value <value>
+Docmasys props remove --archive <archive> --ref <path[@version]> --name <property>
+Docmasys inspect   --archive <archive> [--root <folder>]
 ```
 
 ### Notes
 
 - Paths are vault-relative. `ROOT/` is optional in user input.
 - Version references use `path@version`. Omitting `@version` means “latest”.
+- Version property names are case-insensitive unique keys per version.
+- Property value types are `string`, `int`, and `bool`.
 - Retrieval scopes:
   - `none` = only the requested file
   - `strong` = requested file + strong relations
@@ -65,9 +73,34 @@ Docmasys relate --archive ./archive \
   --to refs/appendix.txt@1 \
   --type strong
 
-# list outgoing relations from a version
-Docmasys relations --archive ./archive --ref reports/q1.txt@2
+# attach typed metadata to a specific version
+Docmasys props set --archive ./archive --ref reports/q1.txt@2 --name reviewed --type bool --value true
+Docmasys props get --archive ./archive --ref reports/q1.txt@2 --name reviewed
+Docmasys props list --archive ./archive --ref reports/q1.txt@2
 ```
+
+## Import extensions
+
+Docmasys now has a small import-extension pipeline. Every newly created file version passes through built-in handlers after its blob is archived. Extensions can:
+
+- inspect the local file contents/path
+- attach typed properties to the imported version
+- emit version-to-version relations
+
+That is enough groundwork for a future SOLIDWORKS-specific importer that inspects a newly archived CAD file and emits dependency relations.
+
+### Built-in examples
+
+- `file-facts`: stores a couple of basic properties such as `file.extension` and `file.filename`
+- `relation-manifest`: parses `.dmsrel` files whose lines look like:
+
+```text
+strong parts/widget.sldprt@3
+weak docs/spec.pdf@1
+optional refs/note.txt@2
+```
+
+Each line creates an outgoing relation from the imported `.dmsrel` version to the referenced version.
 
 ## Test
 
@@ -83,4 +116,5 @@ This is still a prototype.
 
 - `inspect` is intentionally lightweight.
 - `relations` currently reports outgoing relations from the chosen version.
+- `.dmsrel` entries require explicit `@version` references and currently resolve only to already imported target versions.
 - Legacy archives created before version metadata existed may need a fresh import for full history visibility.

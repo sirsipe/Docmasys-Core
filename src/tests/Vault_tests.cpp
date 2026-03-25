@@ -56,17 +56,17 @@ TEST(VaultDatabase, ImportSkipsDuplicateContentButVersionsChangedContent)
 
   auto v1 = db->Import(file, CAS::Identify(file));
   auto v1b = db->Import(file, CAS::Identify(file));
-  EXPECT_EQ(v1->Id, v1b->Id);
-  EXPECT_EQ(v1->VersionNumber, 1);
+  EXPECT_EQ(v1.Version->Id, v1b.Version->Id);
+  EXPECT_EQ(v1.Version->VersionNumber, 1);
 
   MakeFile(file, "two");
   auto v2 = db->Import(file, CAS::Identify(file));
-  EXPECT_NE(v1->Id, v2->Id);
-  EXPECT_EQ(v2->VersionNumber, 2);
+  EXPECT_NE(v1.Version->Id, v2.Version->Id);
+  EXPECT_EQ(v2.Version->VersionNumber, 2);
 
   auto logical = db->GetFileByRelativePath("ROOT/docs/note.txt");
   auto latest = db->GetFileVersion(logical, std::nullopt);
-  EXPECT_EQ(latest->Id, v2->Id);
+  EXPECT_EQ(latest->Id, v2.Version->Id);
 }
 
 TEST(VaultDatabase, ResolveMaterializationByScope)
@@ -84,10 +84,10 @@ TEST(VaultDatabase, ResolveMaterializationByScope)
   auto weakPath = MakeFile(local / "weak.txt", "weak");
   auto optPath = MakeFile(local / "optional.txt", "optional");
 
-  auto rootVersion = db->Import(rootPath, CAS::Identify(rootPath));
-  auto strongVersion = db->Import(strongPath, CAS::Identify(strongPath));
-  auto weakVersion = db->Import(weakPath, CAS::Identify(weakPath));
-  auto optionalVersion = db->Import(optPath, CAS::Identify(optPath));
+  auto rootVersion = db->Import(rootPath, CAS::Identify(rootPath)).Version;
+  auto strongVersion = db->Import(strongPath, CAS::Identify(strongPath)).Version;
+  auto weakVersion = db->Import(weakPath, CAS::Identify(weakPath)).Version;
+  auto optionalVersion = db->Import(optPath, CAS::Identify(optPath)).Version;
 
   db->AddRelation(rootVersion, strongVersion, DB::RelationType::Strong);
   db->AddRelation(strongVersion, weakVersion, DB::RelationType::Weak);
@@ -112,10 +112,10 @@ TEST(VaultDatabase, ResolveMaterializationRejectsConflictingVersions)
   auto rootPath = MakeFile(local / "root.txt", "root");
   auto depPath = MakeFile(local / "dep.txt", "dep-v1");
 
-  auto rootVersion = db->Import(rootPath, CAS::Identify(rootPath));
-  auto depV1 = db->Import(depPath, CAS::Identify(depPath));
+  auto rootVersion = db->Import(rootPath, CAS::Identify(rootPath)).Version;
+  auto depV1 = db->Import(depPath, CAS::Identify(depPath)).Version;
   MakeFile(depPath, "dep-v2");
-  auto depV2 = db->Import(depPath, CAS::Identify(depPath));
+  auto depV2 = db->Import(depPath, CAS::Identify(depPath)).Version;
 
   db->AddRelation(rootVersion, depV1, DB::RelationType::Strong);
   db->AddRelation(rootVersion, depV2, DB::RelationType::Weak);
@@ -154,4 +154,32 @@ TEST(Vault, PopMaterializesSelectedVersionClosure)
   EXPECT_EQ(ReadFile(output / "app.txt"), "v1");
   EXPECT_EQ(ReadFile(output / "dep.txt"), "dep-v1");
   EXPECT_FALSE(fs::exists(output / "ROOT"));
+}
+
+TEST(Vault, ImportExtensionsCanAttachPropertiesAndRelations)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+
+  MakeFile(source / "target.txt", "target");
+  Vault vault(source, archive);
+  vault.Push();
+
+  MakeFile(source / "rules.dmsrel", "strong target.txt@1\n");
+  vault.Push();
+
+  auto db = DB::Database::Open(archive / "content.db", source);
+  auto manifestFile = db->GetFileByRelativePath("ROOT/rules.dmsrel");
+  auto manifestVersion = db->GetFileVersion(manifestFile, 1);
+  const auto extensionProperty = db->GetVersionProperty(manifestVersion, "file.extension");
+  ASSERT_TRUE(extensionProperty.has_value());
+  EXPECT_EQ(std::get<std::string>(extensionProperty->Value), ".dmsrel");
+
+  const auto relations = db->GetOutgoingRelations(manifestVersion, std::nullopt);
+  ASSERT_EQ(relations.size(), 1u);
+  auto targetFile = db->GetFileById(relations.front().To->FileId);
+  EXPECT_EQ(db->BuildRelativePath(targetFile), fs::path("ROOT/target.txt"));
 }

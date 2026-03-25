@@ -29,7 +29,7 @@ namespace Docmasys::DB
     [[nodiscard]] inline const std::filesystem::path &DatabaseFile() const noexcept { return m_DatabaseFile; }
     [[nodiscard]] inline const std::filesystem::path &VaultRoot() const noexcept { return m_LocalVaultRoot; }
 
-    std::shared_ptr<FileVersion> Import(const std::filesystem::path &file, const Identity &blobHash);
+    ImportResult Import(const std::filesystem::path &file, const Identity &blobHash);
     std::shared_ptr<Blob> UpdateBlobStatus(const std::shared_ptr<Blob> &blob, const BlobStatus &newStatus);
     std::shared_ptr<Blob> GetBlob(ID blobId);
     std::vector<std::shared_ptr<Folder>> GetFolders(const std::shared_ptr<Folder> &folder);
@@ -43,10 +43,14 @@ namespace Docmasys::DB
     void AddRelation(const std::shared_ptr<FileVersion> &from, const std::shared_ptr<FileVersion> &to, RelationType type);
     std::filesystem::path BuildRelativePath(const std::shared_ptr<File> &file);
     std::vector<MaterializedFile> InspectCurrentFiles();
+    void SetVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name, const PropertyValue &value);
+    std::optional<VersionProperty> GetVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name);
+    std::vector<VersionProperty> ListVersionProperties(const std::shared_ptr<FileVersion> &version);
+    bool RemoveVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name);
 
   private:
     Database(const std::filesystem::path &databaseFile, const std::filesystem::path &localVaultRoot);
-    void ExecSQL(const char *sql); void OpenTransaction(); void Commit(); void Rollback(); void MigrateLegacySchemaIfNeeded();
+    void ExecSQL(const char *sql); void OpenTransaction(); void Commit(); void Rollback(); void MigrateLegacySchemaIfNeeded(); void MigrateSchemaIfNeeded();
     std::shared_ptr<Blob> GetBlobByHashOrId(const std::optional<ID> &id, const std::optional<Identity> &blobHash);
     std::shared_ptr<Folder> GetOrCreateFolder(const std::string &name, const std::shared_ptr<Folder> &parent);
     std::shared_ptr<Blob> GetOrCreateBlob(const Identity &blobHash);
@@ -55,7 +59,7 @@ namespace Docmasys::DB
     std::shared_ptr<File> SetCurrentVersion(const std::shared_ptr<File> &file, const std::shared_ptr<FileVersion> &version);
     std::shared_ptr<Folder> GetFolderById(ID folderId);
     bool TryGetRelativePath(const std::filesystem::path &file, std::filesystem::path &outRelative) const;
-    std::shared_ptr<FileVersion> InsertToDB(const std::filesystem::path &relativeFilePath, const Identity &blobHash);
+    ImportResult InsertToDB(const std::filesystem::path &relativeFilePath, const Identity &blobHash);
 
     Database(const Database &) = delete; Database &operator=(const Database &) = delete; Database(Database &&) = delete; Database &operator=(Database &&) = delete;
     const std::filesystem::path m_DatabaseFile; const std::filesystem::path m_LocalVaultRoot; struct Impl; std::unique_ptr<Impl> m_Database;

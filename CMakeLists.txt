@@ -16,6 +16,7 @@ target_link_libraries(DocmasysCAS PUBLIC OpenSSL::Crypto PkgConfig::ZSTD)
 
 add_library(DocmasysCore
   src/DB/Database.cpp
+  src/Extensions/Extension.cpp
   src/Vault.cpp
 )
 target_include_directories(DocmasysCore PUBLIC ${CMAKE_SOURCE_DIR}/src)

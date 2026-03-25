@@ -7,7 +7,8 @@ namespace fs = std::filesystem;
 Vault::Vault(const fs::path &root, const fs::path &archive)
     : m_Database(DB::Database::Open(archive / "content.db", root)),
       m_LocalRoot(root),
-      m_ArchiveRoot(archive)
+      m_ArchiveRoot(archive),
+      m_Extensions(Extensions::ImportExtensionRegistry::BuiltIn())
 {
 }
 
@@ -19,13 +20,23 @@ void Vault::Push()
       continue;
 
     const auto identity = CAS::Identify(entry.path());
-    const auto version = m_Database->Import(entry.path(), identity);
-    const auto blob = m_Database->GetBlob(version->BlobId);
+    const auto import = m_Database->Import(entry.path(), identity);
+    const auto blob = m_Database->GetBlob(import.Version->BlobId);
     if (blob->Status == DB::BlobStatus::Pending)
     {
       static_cast<void>(CAS::Store(m_Database->DatabaseFile().parent_path(), entry.path()));
       m_Database->UpdateBlobStatus(blob, DB::BlobStatus::Ready);
     }
+    if (!import.CreatedNewVersion)
+      continue;
+
+    const auto file = m_Database->GetFileById(import.Version->FileId);
+    m_Extensions.Run(Extensions::ImportedVersionContext{
+        .Database = *m_Database,
+        .File = file,
+        .Version = import.Version,
+        .AbsolutePath = entry.path(),
+        .RelativePath = m_Database->BuildRelativePath(file)});
   }
 }
 

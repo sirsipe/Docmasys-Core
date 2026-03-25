@@ -1,4 +1,5 @@
 #include "Database.hpp"
+#include <algorithm>
 #include <cstring>
 #include <sqlite3.h>
 #include <stdexcept>
@@ -46,6 +47,57 @@ bool HasCol(sqlite3 *db, const char *t, const char *c)
   return found;
 }
 
+int GetUserVersion(sqlite3 *db)
+{
+  sqlite3_stmt *st = nullptr;
+  if (sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &st, nullptr) != SQLITE_OK)
+    throw std::runtime_error("failed to read schema version");
+  if (sqlite3_step(st) != SQLITE_ROW)
+  {
+    sqlite3_finalize(st);
+    throw std::runtime_error("failed to read schema version");
+  }
+  const auto version = sqlite3_column_int(st, 0);
+  sqlite3_finalize(st);
+  return version;
+}
+
+std::string NormalizePropertyName(const std::string &name)
+{
+  if (name.empty())
+    throw std::runtime_error("property name cannot be empty");
+  std::string normalized = name;
+  std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch)
+                 { return static_cast<char>(std::tolower(ch)); });
+  return normalized;
+}
+
+PropertyValueType PropertyTypeOf(const PropertyValue &value)
+{
+  if (std::holds_alternative<std::string>(value)) return PropertyValueType::String;
+  if (std::holds_alternative<std::int64_t>(value)) return PropertyValueType::Int;
+  return PropertyValueType::Bool;
+}
+
+VersionProperty ReadVersionProperty(sqlite3_stmt *st)
+{
+  const auto type = static_cast<PropertyValueType>(sqlite3_column_int(st, 2));
+  PropertyValue value;
+  switch (type)
+  {
+  case PropertyValueType::String:
+    value = std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 3)));
+    break;
+  case PropertyValueType::Int:
+    value = static_cast<std::int64_t>(sqlite3_column_int64(st, 4));
+    break;
+  case PropertyValueType::Bool:
+    value = sqlite3_column_int(st, 5) != 0;
+    break;
+  }
+  return VersionProperty{sqlite3_column_int64(st, 0), std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 1))), type, value};
+}
+
 MaterializedFile ReadMaterializedFile(sqlite3_stmt *st)
 {
   auto file = std::make_shared<File>(sqlite3_column_int64(st, 0), OptId(st, 1), std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 2))), OptId(st, 3));
@@ -76,8 +128,9 @@ Database::Database(const fs::path &databaseFile, const fs::path &localVaultRoot)
   m_Database = std::make_unique<Impl>(db);
   ExecSQL("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys = ON;");
   MigrateLegacySchemaIfNeeded();
+  MigrateSchemaIfNeeded();
   ExecSQL(DB_SCHEMA);
-  ExecSQL("PRAGMA user_version = 1;");
+  ExecSQL("PRAGMA user_version = 2;");
 }
 
 Database::~Database() = default;
@@ -110,6 +163,44 @@ void Database::MigrateLegacySchemaIfNeeded()
     ExecSQL("INSERT INTO file_versions(file_id,version_number,blob_id) SELECT id,1,blob_id FROM files_legacy;");
     ExecSQL("UPDATE files SET current_version_id=(SELECT fv.id FROM file_versions fv WHERE fv.file_id=files.id AND fv.version_number=1);");
     ExecSQL("DROP TABLE files_legacy;");
+    ExecSQL("PRAGMA user_version = 1;");
+    Commit();
+  }
+  catch (...)
+  {
+    Rollback();
+    throw;
+  }
+}
+
+void Database::MigrateSchemaIfNeeded()
+{
+  const auto version = GetUserVersion(m_Database->m_db);
+  if (version >= DB_SCHEMA_VERSION)
+    return;
+  OpenTransaction();
+  try
+  {
+    if (version < 2)
+    {
+      ExecSQL(R"SQL(
+        CREATE TABLE IF NOT EXISTS version_properties (
+          version_id INTEGER NOT NULL REFERENCES file_versions(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          value_type INTEGER NOT NULL CHECK (value_type IN (0,1,2)),
+          string_value TEXT,
+          int_value INTEGER,
+          bool_value INTEGER,
+          CHECK ((value_type = 0 AND string_value IS NOT NULL AND int_value IS NULL AND bool_value IS NULL) OR
+                 (value_type = 1 AND string_value IS NULL AND int_value IS NOT NULL AND bool_value IS NULL) OR
+                 (value_type = 2 AND string_value IS NULL AND int_value IS NULL AND bool_value IN (0,1))),
+          PRIMARY KEY(version_id, normalized_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_version_properties_version ON version_properties(version_id);
+      )SQL");
+    }
+    ExecSQL("PRAGMA user_version = 2;");
     Commit();
   }
   catch (...)
@@ -242,7 +333,7 @@ std::shared_ptr<File> Database::SetCurrentVersion(const std::shared_ptr<File> &f
   return GetFileById(file->Id);
 }
 
-std::shared_ptr<FileVersion> Database::Import(const fs::path &file, const Identity &hash)
+ImportResult Database::Import(const fs::path &file, const Identity &hash)
 {
   fs::path rel;
   if (!TryGetRelativePath(file, rel))
@@ -250,7 +341,7 @@ std::shared_ptr<FileVersion> Database::Import(const fs::path &file, const Identi
   return InsertToDB(rel, hash);
 }
 
-std::shared_ptr<FileVersion> Database::InsertToDB(const fs::path &rel, const Identity &hash)
+ImportResult Database::InsertToDB(const fs::path &rel, const Identity &hash)
 {
   std::vector<std::string> parts;
   for (const auto &p : rel.parent_path().lexically_normal())
@@ -271,13 +362,13 @@ std::shared_ptr<FileVersion> Database::InsertToDB(const fs::path &rel, const Ide
       if (cur->BlobId == blob->Id)
       {
         Commit();
-        return cur;
+        return {cur, false};
       }
     }
     const auto ver = CreateFileVersion(file, blob);
     SetCurrentVersion(file, ver);
     Commit();
-    return ver;
+    return {ver, true};
   }
   catch (...)
   {
@@ -444,7 +535,7 @@ std::vector<MaterializedFile> Database::ResolveMaterialization(const std::shared
 void Database::AddRelation(const std::shared_ptr<FileVersion> &from, const std::shared_ptr<FileVersion> &to, RelationType type)
 {
   sqlite3_stmt *st = nullptr;
-  sqlite3_prepare_v2(m_Database->m_db, "INSERT INTO version_relations(from_version_id,to_version_id,relation_type) VALUES(?1,?2,?3);", -1, &st, nullptr);
+  sqlite3_prepare_v2(m_Database->m_db, "INSERT OR IGNORE INTO version_relations(from_version_id,to_version_id,relation_type) VALUES(?1,?2,?3);", -1, &st, nullptr);
   sqlite3_bind_int64(st, 1, from->Id);
   sqlite3_bind_int64(st, 2, to->Id);
   sqlite3_bind_int64(st, 3, static_cast<int>(type));
@@ -490,6 +581,99 @@ std::vector<MaterializedFile> Database::InspectCurrentFiles()
   }
   sqlite3_finalize(st);
   return out;
+}
+
+void Database::SetVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name, const PropertyValue &value)
+{
+  const auto normalizedName = NormalizePropertyName(name);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    INSERT INTO version_properties(version_id,name,normalized_name,value_type,string_value,int_value,bool_value)
+    VALUES(?1,?2,?3,?4,?5,?6,?7)
+    ON CONFLICT(version_id, normalized_name) DO UPDATE SET
+      name=excluded.name,
+      value_type=excluded.value_type,
+      string_value=excluded.string_value,
+      int_value=excluded.int_value,
+      bool_value=excluded.bool_value;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, version->Id);
+  sqlite3_bind_text(st, 2, name.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 3, normalizedName.c_str(), -1, SQLITE_TRANSIENT);
+  const auto type = PropertyTypeOf(value);
+  sqlite3_bind_int64(st, 4, static_cast<int>(type));
+  switch (type)
+  {
+  case PropertyValueType::String:
+    sqlite3_bind_text(st, 5, std::get<std::string>(value).c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_null(st, 6);
+    sqlite3_bind_null(st, 7);
+    break;
+  case PropertyValueType::Int:
+    sqlite3_bind_null(st, 5);
+    sqlite3_bind_int64(st, 6, std::get<std::int64_t>(value));
+    sqlite3_bind_null(st, 7);
+    break;
+  case PropertyValueType::Bool:
+    sqlite3_bind_null(st, 5);
+    sqlite3_bind_null(st, 6);
+    sqlite3_bind_int(st, 7, std::get<bool>(value) ? 1 : 0);
+    break;
+  }
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  sqlite3_finalize(st);
+}
+
+std::optional<VersionProperty> Database::GetVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name)
+{
+  const auto normalizedName = NormalizePropertyName(name);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, "SELECT version_id,name,value_type,string_value,int_value,bool_value FROM version_properties WHERE version_id=?1 AND normalized_name=?2;", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, version->Id);
+  sqlite3_bind_text(st, 2, normalizedName.c_str(), -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(st) != SQLITE_ROW)
+  {
+    sqlite3_finalize(st);
+    return std::nullopt;
+  }
+  auto property = ReadVersionProperty(st);
+  sqlite3_finalize(st);
+  return property;
+}
+
+std::vector<VersionProperty> Database::ListVersionProperties(const std::shared_ptr<FileVersion> &version)
+{
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, "SELECT version_id,name,value_type,string_value,int_value,bool_value FROM version_properties WHERE version_id=?1 ORDER BY normalized_name;", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, version->Id);
+  std::vector<VersionProperty> out;
+  while (sqlite3_step(st) == SQLITE_ROW)
+    out.push_back(ReadVersionProperty(st));
+  sqlite3_finalize(st);
+  return out;
+}
+
+bool Database::RemoveVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name)
+{
+  const auto normalizedName = NormalizePropertyName(name);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, "DELETE FROM version_properties WHERE version_id=?1 AND normalized_name=?2;", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, version->Id);
+  sqlite3_bind_text(st, 2, normalizedName.c_str(), -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  const auto changed = sqlite3_changes(m_Database->m_db) > 0;
+  sqlite3_finalize(st);
+  return changed;
 }
 
 bool Database::TryGetRelativePath(const fs::path &file, fs::path &out) const

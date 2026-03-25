@@ -46,6 +46,8 @@ TEST(CLI, HelpAndVerbFlow)
   EXPECT_EQ(RunCommand(std::string(bin) + " help > /dev/null"), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + root.string()), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " versions --archive " + archive.string() + " --path alpha.txt > /dev/null"), 0);
+  EXPECT_EQ(RunCommand(std::string(bin) + " props set --archive " + archive.string() + " --ref alpha.txt@1 --name answer --type int --value 42"), 0);
+  EXPECT_EQ(RunCommand(std::string(bin) + " props get --archive " + archive.string() + " --ref alpha.txt@1 --name ANSWER > /dev/null"), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " get --archive " + archive.string() + " --ref alpha.txt --out " + out.string()), 0);
   EXPECT_TRUE(fs::exists(out / "alpha.txt"));
 }

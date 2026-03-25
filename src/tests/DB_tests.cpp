@@ -78,21 +78,23 @@ TEST(DB, ImportCreatesVersionHistoryAndPreservesBlobs)
 
   auto db = Database::Open(td.dir / "content.db", vaultRoot);
   auto v1 = db->Import(vaultRoot / "sub" / "file.txt", MakeIdentity(1));
-  auto blob1 = db->GetBlob(v1->BlobId);
+  auto blob1 = db->GetBlob(v1.Version->BlobId);
   db->UpdateBlobStatus(blob1, BlobStatus::Ready);
 
   auto v1Again = db->Import(vaultRoot / "sub" / "file.txt", MakeIdentity(1));
-  EXPECT_EQ(v1->Id, v1Again->Id);
+  EXPECT_EQ(v1.Version->Id, v1Again.Version->Id);
+  EXPECT_FALSE(v1Again.CreatedNewVersion);
 
   auto v2 = db->Import(vaultRoot / "sub" / "file.txt", MakeIdentity(2));
-  EXPECT_NE(v1->Id, v2->Id);
-  EXPECT_EQ(v2->VersionNumber, 2);
+  EXPECT_NE(v1.Version->Id, v2.Version->Id);
+  EXPECT_EQ(v2.Version->VersionNumber, 2);
+  EXPECT_TRUE(v2.CreatedNewVersion);
 
   auto file = db->GetFileByRelativePath("ROOT/sub/file.txt");
   auto current = db->GetFileVersion(file, std::nullopt);
-  EXPECT_EQ(current->Id, v2->Id);
-  EXPECT_EQ(db->GetBlob(v1->BlobId)->Id, v1->BlobId);
-  EXPECT_EQ(db->GetBlob(v2->BlobId)->Id, v2->BlobId);
+  EXPECT_EQ(current->Id, v2.Version->Id);
+  EXPECT_EQ(db->GetBlob(v1.Version->BlobId)->Id, v1.Version->BlobId);
+  EXPECT_EQ(db->GetBlob(v2.Version->BlobId)->Id, v2.Version->BlobId);
 }
 
 TEST(DB, RelationsTraverseAndCyclesAreRejected)
@@ -105,9 +107,9 @@ TEST(DB, RelationsTraverseAndCyclesAreRejected)
   std::ofstream(vaultRoot / "c.txt") << "c";
 
   auto db = Database::Open(td.dir / "content.db", vaultRoot);
-  auto va = db->Import(vaultRoot / "a.txt", MakeIdentity(10));
-  auto vb = db->Import(vaultRoot / "b.txt", MakeIdentity(20));
-  auto vc = db->Import(vaultRoot / "c.txt", MakeIdentity(30));
+  auto va = db->Import(vaultRoot / "a.txt", MakeIdentity(10)).Version;
+  auto vb = db->Import(vaultRoot / "b.txt", MakeIdentity(20)).Version;
+  auto vc = db->Import(vaultRoot / "c.txt", MakeIdentity(30)).Version;
 
   db->AddRelation(va, vb, RelationType::Strong);
   db->AddRelation(vb, vc, RelationType::Weak);
@@ -115,6 +117,35 @@ TEST(DB, RelationsTraverseAndCyclesAreRejected)
   EXPECT_EQ(db->ResolveMaterialization(va, RelationScope::Strong).size(), 2u);
   EXPECT_EQ(db->ResolveMaterialization(va, RelationScope::StrongAndWeak).size(), 3u);
   EXPECT_THROW(db->AddRelation(vc, va, RelationType::Optional), std::runtime_error);
+}
+
+TEST(DB, VersionPropertiesAreTypedAndCaseInsensitive)
+{
+  TempDir td;
+  const auto vaultRoot = td.dir / "vault";
+  fs::create_directories(vaultRoot);
+  std::ofstream(vaultRoot / "a.txt") << "a";
+
+  auto db = Database::Open(td.dir / "content.db", vaultRoot);
+  auto version = db->Import(vaultRoot / "a.txt", MakeIdentity(10)).Version;
+
+  db->SetVersionProperty(version, "Title", std::string("alpha"));
+  db->SetVersionProperty(version, "build", std::int64_t(42));
+  db->SetVersionProperty(version, "ENABLED", true);
+  db->SetVersionProperty(version, "title", std::string("beta"));
+
+  const auto title = db->GetVersionProperty(version, "TITLE");
+  ASSERT_TRUE(title.has_value());
+  EXPECT_EQ(title->Name, "title");
+  EXPECT_EQ(std::get<std::string>(title->Value), "beta");
+
+  const auto properties = db->ListVersionProperties(version);
+  ASSERT_EQ(properties.size(), 3u);
+  EXPECT_EQ(std::get<std::int64_t>(db->GetVersionProperty(version, "Build")->Value), 42);
+  EXPECT_EQ(std::get<bool>(db->GetVersionProperty(version, "enabled")->Value), true);
+
+  EXPECT_TRUE(db->RemoveVersionProperty(version, "TiTlE"));
+  EXPECT_FALSE(db->GetVersionProperty(version, "title").has_value());
 }
 
 TEST(DB, LegacySchemaIsMigrated)

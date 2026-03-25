@@ -1,5 +1,6 @@
 #pragma once
 #include "DB/Database.hpp"
+#include "Extensions/Extension.hpp"
 #include <filesystem>
 #include <optional>
 #include <vector>
@@ -28,5 +29,6 @@ namespace Docmasys
     std::unique_ptr<DB::Database> m_Database;
     const std::filesystem::path m_LocalRoot;
     const std::filesystem::path m_ArchiveRoot;
+    Extensions::ImportExtensionRegistry m_Extensions;
   };
 }

@@ -37,6 +37,27 @@ std::string ToString(DB::RelationType type)
   throw std::runtime_error("unknown relation type");
 }
 
+std::string ToString(PropertyValueType type)
+{
+  switch (type)
+  {
+  case PropertyValueType::String:
+    return "string";
+  case PropertyValueType::Int:
+    return "int";
+  case PropertyValueType::Bool:
+    return "bool";
+  }
+  throw std::runtime_error("unknown property type");
+}
+
+std::string ToString(const PropertyValue &value)
+{
+  if (const auto *s = std::get_if<std::string>(&value)) return *s;
+  if (const auto *i = std::get_if<std::int64_t>(&value)) return std::to_string(*i);
+  return std::get<bool>(value) ? "true" : "false";
+}
+
 DB::RelationType ParseRelationType(const std::string &value)
 {
   if (value == "strong") return DB::RelationType::Strong;
@@ -52,6 +73,19 @@ DB::RelationScope ParseScope(const std::string &value)
   if (value == "strong+weak") return DB::RelationScope::StrongAndWeak;
   if (value == "all") return DB::RelationScope::All;
   throw std::runtime_error("invalid scope: " + value);
+}
+
+PropertyValue ParsePropertyValue(const std::string &type, const std::string &value)
+{
+  if (type == "string") return value;
+  if (type == "int") return static_cast<std::int64_t>(std::stoll(value));
+  if (type == "bool")
+  {
+    if (value == "true" || value == "1") return true;
+    if (value == "false" || value == "0") return false;
+    throw std::runtime_error("invalid bool value: " + value);
+  }
+  throw std::runtime_error("invalid property type: " + type);
 }
 
 ParsedRef ParseRef(const std::string &value)
@@ -114,6 +148,10 @@ void PrintUsage(const std::string &programName)
   std::cout << "  " << programName << " versions --archive <archive> --path <path>\n";
   std::cout << "  " << programName << " relate --archive <archive> --from <path[@version]> --to <path[@version]> --type strong|weak|optional\n";
   std::cout << "  " << programName << " relations --archive <archive> --ref <path[@version]> [--type strong|weak|optional|all]\n";
+  std::cout << "  " << programName << " props list --archive <archive> --ref <path[@version]>\n";
+  std::cout << "  " << programName << " props get --archive <archive> --ref <path[@version]> --name <property>\n";
+  std::cout << "  " << programName << " props set --archive <archive> --ref <path[@version]> --name <property> --type string|int|bool --value <value>\n";
+  std::cout << "  " << programName << " props remove --archive <archive> --ref <path[@version]> --name <property>\n";
   std::cout << "  " << programName << " inspect --archive <archive> [--root <folder>]\n";
 }
 
@@ -178,6 +216,45 @@ int RunRelations(const Options &options)
   return 0;
 }
 
+int RunProps(const std::string &subcommand, const Options &options)
+{
+  auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
+  const auto ref = ParseRef(Require(options, "ref"));
+  auto file = db->GetFileByRelativePath(NormalizeVaultPath(ref.Path));
+  auto version = db->GetFileVersion(file, ref.Version);
+
+  if (subcommand == "list")
+  {
+    for (const auto &property : db->ListVersionProperties(version))
+      std::cout << property.Name << '\t' << ToString(property.Type) << '\t' << ToString(property.Value) << "\n";
+    return 0;
+  }
+
+  if (subcommand == "get")
+  {
+    const auto property = db->GetVersionProperty(version, Require(options, "name"));
+    if (!property)
+      throw std::runtime_error("property not found");
+    std::cout << property->Name << '\t' << ToString(property->Type) << '\t' << ToString(property->Value) << "\n";
+    return 0;
+  }
+
+  if (subcommand == "set")
+  {
+    db->SetVersionProperty(version, Require(options, "name"), ParsePropertyValue(Require(options, "type"), Require(options, "value")));
+    return 0;
+  }
+
+  if (subcommand == "remove")
+  {
+    if (!db->RemoveVersionProperty(version, Require(options, "name")))
+      throw std::runtime_error("property not found");
+    return 0;
+  }
+
+  throw std::runtime_error("unknown props subcommand: " + subcommand);
+}
+
 int RunInspect(const Options &options)
 {
   const auto archive = fs::path(Require(options, "archive"));
@@ -204,6 +281,13 @@ int main(int argc, char *argv[])
     {
       PrintUsage(programName);
       return 0;
+    }
+
+    if (command == "props")
+    {
+      if (argc < 3)
+        throw std::runtime_error("props requires a subcommand");
+      return RunProps(argv[2], ParseOptions(argc, argv, 3));
     }
 
     const auto options = ParseOptions(argc, argv, 2);
