@@ -1,6 +1,8 @@
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -21,7 +23,14 @@ struct ParsedRef
   std::optional<std::int64_t> Version;
 };
 
-using Options = std::unordered_map<std::string, std::string>;
+struct RelationSpec
+{
+  ParsedRef From;
+  ParsedRef To;
+  DB::RelationType Type;
+};
+
+using Options = std::unordered_map<std::string, std::vector<std::string>>;
 
 std::string ToString(DB::RelationType type)
 {
@@ -117,25 +126,110 @@ Options ParseOptions(int argc, char *argv[], int start)
     const auto key = arg.substr(2);
     if (i + 1 >= argc || std::string_view(argv[i + 1]).starts_with("--"))
       throw std::runtime_error("missing value for --" + key);
-    options[key] = argv[++i];
+    options[key].push_back(argv[++i]);
   }
   return options;
+}
+
+std::vector<std::string> ReadManifestLines(const fs::path &file)
+{
+  std::ifstream input(file);
+  if (!input)
+    throw std::runtime_error("failed to open manifest: " + file.string());
+
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(input, line);)
+  {
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    const auto first = line.find_first_not_of(" \t");
+    if (first == std::string::npos || line[first] == '#')
+      continue;
+    lines.push_back(line.substr(first));
+  }
+  return lines;
+}
+
+std::vector<std::string> ValuesOf(const Options &options, const std::string &key)
+{
+  auto it = options.find(key);
+  if (it == options.end())
+    return {};
+  return it->second;
 }
 
 const std::string &Require(const Options &options, const std::string &key)
 {
   auto it = options.find(key);
-  if (it == options.end() || it->second.empty())
+  if (it == options.end() || it->second.empty() || it->second.front().empty())
     throw std::runtime_error("missing required option --" + key);
-  return it->second;
+  return it->second.front();
 }
 
 std::optional<std::string> OptionalValue(const Options &options, const std::string &key)
 {
   auto it = options.find(key);
-  if (it == options.end())
+  if (it == options.end() || it->second.empty())
     return std::nullopt;
-  return it->second;
+  return it->second.front();
+}
+
+std::vector<std::string> CollectBatchValues(const Options &options, const std::string &valueKey, const std::string &fileKey)
+{
+  auto values = ValuesOf(options, valueKey);
+  for (const auto &manifest : ValuesOf(options, fileKey))
+  {
+    auto lines = ReadManifestLines(manifest);
+    values.insert(values.end(), lines.begin(), lines.end());
+  }
+  return values;
+}
+
+RelationSpec ParseRelationLine(const std::string &line)
+{
+  std::istringstream input(line);
+  std::string from;
+  std::string to;
+  std::string type;
+  if (!(input >> from >> to >> type))
+    throw std::runtime_error("invalid relation manifest line: " + line);
+  std::string extra;
+  if (input >> extra)
+    throw std::runtime_error("invalid relation manifest line: " + line);
+  return {ParseRef(from), ParseRef(to), ParseRelationType(type)};
+}
+
+std::vector<RelationSpec> CollectRelationSpecs(const Options &options)
+{
+  std::vector<RelationSpec> specs;
+
+  auto fromRefs = ValuesOf(options, "from");
+  auto toRefs = ValuesOf(options, "to");
+  auto types = ValuesOf(options, "type");
+
+  if (!fromRefs.empty() || !toRefs.empty() || !types.empty())
+  {
+    if (fromRefs.empty() || toRefs.empty() || types.empty())
+      throw std::runtime_error("relate requires --from, --to, and --type");
+    if (fromRefs.size() != toRefs.size())
+      throw std::runtime_error("relate requires matching counts for --from and --to");
+    if (types.size() != 1 && types.size() != fromRefs.size())
+      throw std::runtime_error("relate requires either one --type for all pairs or one --type per pair");
+
+    for (std::size_t i = 0; i < fromRefs.size(); ++i)
+      specs.push_back({ParseRef(fromRefs[i]), ParseRef(toRefs[i]), ParseRelationType(types[types.size() == 1 ? 0 : i])});
+  }
+
+  for (const auto &manifest : ValuesOf(options, "edges-file"))
+  {
+    for (const auto &line : ReadManifestLines(manifest))
+      specs.push_back(ParseRelationLine(line));
+  }
+
+  if (specs.empty())
+    throw std::runtime_error("relate requires at least one relation spec");
+
+  return specs;
 }
 
 void PrintUsage(const std::string &programName)
@@ -144,14 +238,14 @@ void PrintUsage(const std::string &programName)
   std::cout << "Usage:\n";
   std::cout << "  " << programName << " help\n";
   std::cout << "  " << programName << " import --archive <archive> --root <folder>\n";
-  std::cout << "  " << programName << " get --archive <archive> --ref <path[@version]> [--out <folder>] [--scope none|strong|strong+weak|all]\n";
-  std::cout << "  " << programName << " versions --archive <archive> --path <path>\n";
-  std::cout << "  " << programName << " relate --archive <archive> --from <path[@version]> --to <path[@version]> --type strong|weak|optional\n";
-  std::cout << "  " << programName << " relations --archive <archive> --ref <path[@version]> [--type strong|weak|optional|all]\n";
-  std::cout << "  " << programName << " props list --archive <archive> --ref <path[@version]>\n";
-  std::cout << "  " << programName << " props get --archive <archive> --ref <path[@version]> --name <property>\n";
-  std::cout << "  " << programName << " props set --archive <archive> --ref <path[@version]> --name <property> --type string|int|bool --value <value>\n";
-  std::cout << "  " << programName << " props remove --archive <archive> --ref <path[@version]> --name <property>\n";
+  std::cout << "  " << programName << " get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all]\n";
+  std::cout << "  " << programName << " versions --archive <archive> (--path <path> | --paths-file <file>)...\n";
+  std::cout << "  " << programName << " relate --archive <archive> [--from <path[@version]> --to <path[@version]> --type strong|weak|optional]... [--edges-file <file>]\n";
+  std::cout << "  " << programName << " relations --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--type strong|weak|optional|all]\n";
+  std::cout << "  " << programName << " props list --archive <archive> (--ref <path[@version]> | --refs-file <file>)...\n";
+  std::cout << "  " << programName << " props get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>\n";
+  std::cout << "  " << programName << " props set --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property> --type string|int|bool --value <value>\n";
+  std::cout << "  " << programName << " props remove --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>\n";
   std::cout << "  " << programName << " inspect --archive <archive> [--root <folder>]\n";
 }
 
@@ -165,53 +259,77 @@ int RunGet(const Options &options)
 {
   const auto archive = fs::path(Require(options, "archive"));
   const auto out = fs::path(OptionalValue(options, "out").value_or("."));
-  const auto ref = ParseRef(Require(options, "ref"));
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("get requires at least one --ref or --refs-file");
+
   Vault vault(out, archive);
-  vault.Pop(MaterializationOptions{
-      .RelativeFilePath = NormalizeVaultPath(ref.Path),
-      .VersionNumber = ref.Version,
-      .RelationScope = ParseScope(OptionalValue(options, "scope").value_or("none"))});
+  const auto scope = ParseScope(OptionalValue(options, "scope").value_or("none"));
+  for (const auto &rawRef : refs)
+  {
+    const auto ref = ParseRef(rawRef);
+    vault.Pop(MaterializationOptions{
+        .RelativeFilePath = NormalizeVaultPath(ref.Path),
+        .VersionNumber = ref.Version,
+        .RelationScope = scope});
+  }
   return 0;
 }
 
 int RunVersions(const Options &options)
 {
   auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
-  auto file = db->GetFileByRelativePath(NormalizeVaultPath(Require(options, "path")));
-  for (const auto &version : db->GetFileVersions(file))
-    std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber << "\n";
+  const auto paths = CollectBatchValues(options, "path", "paths-file");
+  if (paths.empty())
+    throw std::runtime_error("versions requires at least one --path or --paths-file");
+
+  for (const auto &rawPath : paths)
+  {
+    auto file = db->GetFileByRelativePath(NormalizeVaultPath(rawPath));
+    for (const auto &version : db->GetFileVersions(file))
+      std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber << "\n";
+  }
   return 0;
 }
 
 int RunRelate(const Options &options)
 {
   auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
-  const auto fromRef = ParseRef(Require(options, "from"));
-  const auto toRef = ParseRef(Require(options, "to"));
-  if (!fromRef.Version || !toRef.Version)
-    throw std::runtime_error("relate requires explicit @version in both --from and --to");
-  auto fromFile = db->GetFileByRelativePath(NormalizeVaultPath(fromRef.Path));
-  auto toFile = db->GetFileByRelativePath(NormalizeVaultPath(toRef.Path));
-  db->AddRelation(db->GetFileVersion(fromFile, fromRef.Version), db->GetFileVersion(toFile, toRef.Version), ParseRelationType(Require(options, "type")));
+  for (const auto &spec : CollectRelationSpecs(options))
+  {
+    if (!spec.From.Version || !spec.To.Version)
+      throw std::runtime_error("relate requires explicit @version in both endpoints");
+    auto fromFile = db->GetFileByRelativePath(NormalizeVaultPath(spec.From.Path));
+    auto toFile = db->GetFileByRelativePath(NormalizeVaultPath(spec.To.Path));
+    db->AddRelation(db->GetFileVersion(fromFile, spec.From.Version), db->GetFileVersion(toFile, spec.To.Version), spec.Type);
+  }
   return 0;
 }
 
 int RunRelations(const Options &options)
 {
   auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
-  const auto ref = ParseRef(Require(options, "ref"));
-  auto file = db->GetFileByRelativePath(NormalizeVaultPath(ref.Path));
-  auto version = db->GetFileVersion(file, ref.Version);
   std::optional<DB::RelationType> typeFilter;
   const auto filter = OptionalValue(options, "type").value_or("all");
   if (filter != "all")
     typeFilter = ParseRelationType(filter);
-  for (const auto &rel : db->GetOutgoingRelations(version, typeFilter))
+
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("relations requires at least one --ref or --refs-file");
+
+  for (const auto &rawRef : refs)
   {
-    auto targetFile = db->GetFileById(rel.To->FileId);
-    std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber
-              << " --" << ToString(rel.Type) << "--> "
-              << db->BuildRelativePath(targetFile).generic_string() << '@' << rel.To->VersionNumber << "\n";
+    const auto ref = ParseRef(rawRef);
+    auto file = db->GetFileByRelativePath(NormalizeVaultPath(ref.Path));
+    auto version = db->GetFileVersion(file, ref.Version);
+    for (const auto &rel : db->GetOutgoingRelations(version, typeFilter))
+    {
+      auto targetFile = db->GetFileById(rel.To->FileId);
+      std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber
+                << " --" << ToString(rel.Type) << "--> "
+                << db->BuildRelativePath(targetFile).generic_string() << '@' << rel.To->VersionNumber << "\n";
+    }
   }
   return 0;
 }
@@ -219,40 +337,51 @@ int RunRelations(const Options &options)
 int RunProps(const std::string &subcommand, const Options &options)
 {
   auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
-  const auto ref = ParseRef(Require(options, "ref"));
-  auto file = db->GetFileByRelativePath(NormalizeVaultPath(ref.Path));
-  auto version = db->GetFileVersion(file, ref.Version);
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("props requires at least one --ref or --refs-file");
 
-  if (subcommand == "list")
+  for (const auto &rawRef : refs)
   {
-    for (const auto &property : db->ListVersionProperties(version))
-      std::cout << property.Name << '\t' << ToString(property.Type) << '\t' << ToString(property.Value) << "\n";
-    return 0;
+    const auto ref = ParseRef(rawRef);
+    auto file = db->GetFileByRelativePath(NormalizeVaultPath(ref.Path));
+    auto version = db->GetFileVersion(file, ref.Version);
+
+    if (subcommand == "list")
+    {
+      for (const auto &property : db->ListVersionProperties(version))
+        std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber << '\t'
+                  << property.Name << '\t' << ToString(property.Type) << '\t' << ToString(property.Value) << "\n";
+      continue;
+    }
+
+    if (subcommand == "get")
+    {
+      const auto property = db->GetVersionProperty(version, Require(options, "name"));
+      if (!property)
+        throw std::runtime_error("property not found");
+      std::cout << db->BuildRelativePath(file).generic_string() << '@' << version->VersionNumber << '\t'
+                << property->Name << '\t' << ToString(property->Type) << '\t' << ToString(property->Value) << "\n";
+      continue;
+    }
+
+    if (subcommand == "set")
+    {
+      db->SetVersionProperty(version, Require(options, "name"), ParsePropertyValue(Require(options, "type"), Require(options, "value")));
+      continue;
+    }
+
+    if (subcommand == "remove")
+    {
+      if (!db->RemoveVersionProperty(version, Require(options, "name")))
+        throw std::runtime_error("property not found");
+      continue;
+    }
+
+    throw std::runtime_error("unknown props subcommand: " + subcommand);
   }
 
-  if (subcommand == "get")
-  {
-    const auto property = db->GetVersionProperty(version, Require(options, "name"));
-    if (!property)
-      throw std::runtime_error("property not found");
-    std::cout << property->Name << '\t' << ToString(property->Type) << '\t' << ToString(property->Value) << "\n";
-    return 0;
-  }
-
-  if (subcommand == "set")
-  {
-    db->SetVersionProperty(version, Require(options, "name"), ParsePropertyValue(Require(options, "type"), Require(options, "value")));
-    return 0;
-  }
-
-  if (subcommand == "remove")
-  {
-    if (!db->RemoveVersionProperty(version, Require(options, "name")))
-      throw std::runtime_error("property not found");
-    return 0;
-  }
-
-  throw std::runtime_error("unknown props subcommand: " + subcommand);
+  return 0;
 }
 
 int RunInspect(const Options &options)

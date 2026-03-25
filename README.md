@@ -7,6 +7,7 @@ Small document vault prototype with:
 - lightweight file version tracking and relations
 - per-version typed properties
 - import-time extension hooks
+- batch-friendly CLI inputs for scripting and large runs
 
 ## Build
 
@@ -26,16 +27,32 @@ The CLI now prefers verbs over the old flag soup.
 
 ```text
 Docmasys import    --archive <archive> --root <folder>
-Docmasys get       --archive <archive> --ref <path[@version]> [--out <folder>] [--scope none|strong|strong+weak|all]
-Docmasys versions  --archive <archive> --path <path>
-Docmasys relate    --archive <archive> --from <path[@version]> --to <path[@version]> --type strong|weak|optional
-Docmasys relations --archive <archive> --ref <path[@version]> [--type strong|weak|optional|all]
-Docmasys props list   --archive <archive> --ref <path[@version]>
-Docmasys props get    --archive <archive> --ref <path[@version]> --name <property>
-Docmasys props set    --archive <archive> --ref <path[@version]> --name <property> --type string|int|bool --value <value>
-Docmasys props remove --archive <archive> --ref <path[@version]> --name <property>
+Docmasys get       --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all]
+Docmasys versions  --archive <archive> (--path <path> | --paths-file <file>)...
+Docmasys relate    --archive <archive> [--from <path[@version]> --to <path[@version]> --type strong|weak|optional]... [--edges-file <file>]
+Docmasys relations --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--type strong|weak|optional|all]
+Docmasys props list   --archive <archive> (--ref <path[@version]> | --refs-file <file>)...
+Docmasys props get    --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>
+Docmasys props set    --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property> --type string|int|bool --value <value>
+Docmasys props remove --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>
 Docmasys inspect   --archive <archive> [--root <folder>]
 ```
+
+### Batch UX
+
+The batch model is intentionally uniform instead of inventing command-specific flags:
+
+- repeat the primary selector flag when you already have values in shell variables
+- or pass a manifest file with one selector per line (`--refs-file`, `--paths-file`)
+- manifests ignore blank lines and `#` comments
+- output stays line-oriented so it is easy to pipe into other tools
+
+For `relate`, batch input works in two ways:
+
+- repeat `--from`, `--to`, and `--type` in matching order
+- or use `--edges-file` with one whitespace-separated triple per line: `<from> <to> <type>`
+
+If `relate` receives multiple pairs but only one `--type`, that type is broadcast to all pairs.
 
 ### Notes
 
@@ -61,8 +78,17 @@ Docmasys inspect --archive ./archive --root ./docs
 # list versions for one logical file
 Docmasys versions --archive ./archive --path reports/q1.txt
 
+# list versions for many files from a manifest
+Docmasys versions --archive ./archive --paths-file ./paths.txt
+
 # fetch the latest version of one file
 Docmasys get --archive ./archive --ref reports/q1.txt --out ./restore
+
+# fetch many files in one run
+Docmasys get --archive ./archive \
+  --ref reports/q1.txt \
+  --ref refs/appendix.txt@1 \
+  --out ./restore
 
 # fetch a specific version and include strong+weak dependencies
 Docmasys get --archive ./archive --ref reports/q1.txt@2 --out ./restore --scope strong+weak
@@ -73,10 +99,20 @@ Docmasys relate --archive ./archive \
   --to refs/appendix.txt@1 \
   --type strong
 
-# attach typed metadata to a specific version
+# relate many pairs from a manifest
+cat > edges.txt <<'EOF'
+reports/q1.txt@2 refs/appendix.txt@1 strong
+reports/q1.txt@2 refs/note.txt@2 optional
+EOF
+Docmasys relate --archive ./archive --edges-file ./edges.txt
+
+# attach typed metadata to one or many versions
 Docmasys props set --archive ./archive --ref reports/q1.txt@2 --name reviewed --type bool --value true
-Docmasys props get --archive ./archive --ref reports/q1.txt@2 --name reviewed
-Docmasys props list --archive ./archive --ref reports/q1.txt@2
+Docmasys props set --archive ./archive \
+  --refs-file ./refs.txt \
+  --name reviewed --type bool --value true
+Docmasys props get --archive ./archive --refs-file ./refs.txt --name reviewed
+Docmasys props list --archive ./archive --refs-file ./refs.txt
 ```
 
 ## Import extensions
@@ -117,4 +153,5 @@ This is still a prototype.
 - `inspect` is intentionally lightweight.
 - `relations` currently reports outgoing relations from the chosen version.
 - `.dmsrel` entries require explicit `@version` references and currently resolve only to already imported target versions.
+- Batch commands still fail fast on the first invalid item; they do not yet offer partial-success reporting.
 - Legacy archives created before version metadata existed may need a fresh import for full history visibility.
