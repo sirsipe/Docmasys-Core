@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include "../Types.hpp"
@@ -9,6 +10,13 @@
 
 namespace Docmasys::DB
 {
+  struct VersionRelationView
+  {
+    std::shared_ptr<FileVersion> From;
+    std::shared_ptr<FileVersion> To;
+    RelationType Type;
+  };
+
   class Database
   {
   public:
@@ -29,9 +37,12 @@ namespace Docmasys::DB
     std::shared_ptr<File> GetFileByRelativePath(const std::filesystem::path &relativeFilePath);
     std::shared_ptr<File> GetFileById(ID fileId);
     std::shared_ptr<FileVersion> GetFileVersion(const std::shared_ptr<File> &file, const std::optional<std::int64_t> &versionNumber);
+    std::vector<std::shared_ptr<FileVersion>> GetFileVersions(const std::shared_ptr<File> &file);
+    std::vector<VersionRelationView> GetOutgoingRelations(const std::shared_ptr<FileVersion> &from, std::optional<RelationType> typeFilter);
     std::vector<MaterializedFile> ResolveMaterialization(const std::shared_ptr<FileVersion> &rootVersion, RelationScope scope);
     void AddRelation(const std::shared_ptr<FileVersion> &from, const std::shared_ptr<FileVersion> &to, RelationType type);
     std::filesystem::path BuildRelativePath(const std::shared_ptr<File> &file);
+    std::vector<MaterializedFile> InspectCurrentFiles();
 
   private:
     Database(const std::filesystem::path &databaseFile, const std::filesystem::path &localVaultRoot);

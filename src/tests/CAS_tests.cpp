@@ -69,7 +69,8 @@ TEST(CAS, Identify_SameContentSameHash)
   auto h1 = Docmasys::CAS::Identify(f1);
   auto h2 = Docmasys::CAS::Identify(f2);
   EXPECT_EQ(h1, h2);
-  EXPECT_EQ(h1.size(), 64u); // sha256 hex
+  EXPECT_EQ(h1.size(), 32u); // raw sha256 bytes
+  EXPECT_EQ(Docmasys::CAS::ToHexString(h1).size(), 64u);
 }
 
 TEST(CAS, Store_And_Retrieve_Roundtrip)

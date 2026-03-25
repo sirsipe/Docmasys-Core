@@ -23,7 +23,7 @@ void Vault::Push()
     const auto blob = m_Database->GetBlob(version->BlobId);
     if (blob->Status == DB::BlobStatus::Pending)
     {
-      CAS::Store(m_Database->DatabaseFile().parent_path(), entry.path());
+      static_cast<void>(CAS::Store(m_Database->DatabaseFile().parent_path(), entry.path()));
       m_Database->UpdateBlobStatus(blob, DB::BlobStatus::Ready);
     }
   }
@@ -35,7 +35,9 @@ void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files)
   {
     if (entry.BlobRef->Status != DB::BlobStatus::Ready)
       continue;
-    CAS::Retrieve(m_ArchiveRoot, entry.BlobRef->Hash, m_LocalRoot / entry.RelativePath.lexically_relative("ROOT"));
+
+    const auto relative = entry.RelativePath.lexically_relative("ROOT");
+    CAS::Retrieve(m_ArchiveRoot, entry.BlobRef->Hash, m_LocalRoot / relative);
   }
 }
 
@@ -52,4 +54,17 @@ void Vault::Pop()
   for (const auto &rootFolder : m_Database->GetFolders(nullptr))
     if (rootFolder->Name == "ROOT")
       MaterializeFolderTree(rootFolder, m_LocalRoot);
+}
+
+void Vault::Pop(const MaterializationOptions &options)
+{
+  auto relative = options.RelativeFilePath.lexically_normal();
+  if (relative.empty())
+    throw std::runtime_error("relative file path is required");
+  if (*relative.begin() != fs::path("ROOT"))
+    relative = fs::path("ROOT") / relative;
+
+  const auto file = m_Database->GetFileByRelativePath(relative);
+  const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
+  MaterializeFiles(m_Database->ResolveMaterialization(version, options.RelationScope));
 }

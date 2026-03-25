@@ -5,51 +5,35 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(DocmasysCAS 
-  src/CAS/CAS.cpp
-)
-
-target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
-
-# --- Source files
-add_executable(Docmasys
-    src/CAS/CAS.cpp
-    src/DB/Database.cpp
-    src/Vault.cpp
-    src/main.cpp
-)
-
-# OpenSSL
 find_package(OpenSSL REQUIRED)
-target_link_libraries(Docmasys PRIVATE OpenSSL::Crypto)
-
-# ZSTD via pkg-config
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
-target_link_libraries(Docmasys PRIVATE PkgConfig::ZSTD)
-
-# SQLite
 find_package(SQLite3 REQUIRED)
-target_link_libraries(Docmasys PRIVATE SQLite::SQLite3)
 
-target_link_libraries(DocmasysCAS
-  PUBLIC
-    OpenSSL::Crypto
-    PkgConfig::ZSTD
+add_library(DocmasysCAS src/CAS/CAS.cpp)
+target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(DocmasysCAS PUBLIC OpenSSL::Crypto PkgConfig::ZSTD)
+
+add_library(DocmasysCore
+  src/DB/Database.cpp
+  src/Vault.cpp
 )
+target_include_directories(DocmasysCore PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(DocmasysCore PUBLIC DocmasysCAS SQLite::SQLite3)
 
-# Add tests
+add_executable(Docmasys src/main.cpp)
+target_link_libraries(Docmasys PRIVATE DocmasysCore)
+
 enable_testing()
 add_subdirectory(src/tests)
 
-# --- Platform specifics
 if(MSVC)
-    target_compile_options(Docmasys PRIVATE /W4)
+  target_compile_options(Docmasys PRIVATE /W4)
+  target_compile_options(DocmasysCore PRIVATE /W4)
 else()
-    target_compile_options(Docmasys PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(Docmasys PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(DocmasysCore PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(DocmasysCAS PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# --- Output folder for built binary
-set_target_properties(Docmasys PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
+set_target_properties(Docmasys PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
