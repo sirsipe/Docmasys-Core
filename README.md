@@ -411,6 +411,15 @@ Current pipeline:
 - builds the project
 - runs the full CTest suite
 
+## Project docs
+
+Additional lightweight project/process docs live under `docs/`:
+
+- `docs/BACKLOG.md` - work tracking template and current priorities
+- `docs/SECURITY.md` - security goals, threat model, and vulnerability reporting path
+- `docs/DEPENDENCIES_AND_SBOM.md` - dependency expectations and SBOM guidance
+- `docs/RELEASES_AND_COMPLIANCE.md` - release hygiene and CRA-adjacent notes
+
 ## Current limitations
 
 - `inspect` is intentionally lightweight
