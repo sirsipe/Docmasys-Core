@@ -166,6 +166,13 @@ Identity Docmasys::CAS::Store(const fs::path &root, const fs::path &file)
     }
   }
   out.flush();
+  out.close();
+  if (!out)
+  {
+    ZSTD_freeCCtx(cctx);
+    EVP_MD_CTX_free(md);
+    throw std::runtime_error("Store: final write failed");
+  }
   ZSTD_freeCCtx(cctx);
 
   auto identity = ::CloseHash(md);
