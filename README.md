@@ -1,5 +1,7 @@
 # Docmasys Core
 
+[![CI](https://github.com/sirsipe/Docmasys-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/sirsipe/Docmasys-Core/actions/workflows/ci.yml)
+
 Docmasys Core is a small document/archive engine built around:
 
 - content-addressed storage (CAS)
