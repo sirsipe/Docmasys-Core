@@ -411,6 +411,12 @@ Current pipeline:
 - builds the project
 - runs the full CTest suite
 
+Development process expectations are documented in:
+
+```text
+docs/ARCHITECTURE_DEVOPS_POLICY.md
+```
+
 ## Project docs
 
 Additional lightweight project/process docs live under `docs/`:
