@@ -1,4 +1,4 @@
-name: CI
+name: Cross-platform CI
 
 on:
   push:
@@ -9,7 +9,8 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  linux-build:
+    name: Linux build
     runs-on: ubuntu-latest
 
     steps:
@@ -34,4 +35,21 @@ jobs:
         run: cmake --build build --config Release -j
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --build-config Release
+
+  windows-build:
+    name: Windows build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --build-config Release
