@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <chrono>
 
 #include "../CAS/CAS.hpp"
 #include "../DB/Database.hpp"
@@ -18,7 +19,8 @@ namespace
     fs::path dir;
     TempDir()
     {
-      dir = fs::temp_directory_path() / fs::path("docmasys_vault_test_" + std::to_string(::getpid()) + "_" + std::to_string(std::rand()));
+      const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+      dir = fs::temp_directory_path() / fs::path("docmasys_vault_test_" + unique);
       fs::create_directories(dir);
     }
     ~TempDir()

@@ -3,7 +3,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <sstream>
-#include <unistd.h>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -12,7 +12,8 @@ struct TempDir
   fs::path dir;
   TempDir()
   {
-    dir = fs::temp_directory_path() / fs::path("docmasys_cli_test_" + std::to_string(::getpid()));
+    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    dir = fs::temp_directory_path() / fs::path("docmasys_cli_test_" + unique);
     fs::remove_all(dir);
     fs::create_directories(dir);
   }
@@ -31,6 +32,24 @@ static int RunCommand(const std::string &cmd)
 static std::string ShellQuote(const fs::path &path)
 {
   return '"' + path.string() + '"';
+}
+
+static std::string NullRedirect()
+{
+#ifdef _WIN32
+  return " > NUL";
+#else
+  return " > /dev/null";
+#endif
+}
+
+static std::string NullRedirectBoth()
+{
+#ifdef _WIN32
+  return " > NUL 2>&1";
+#else
+  return " > /dev/null 2>&1";
+#endif
 }
 
 static std::string RunAndCapture(const fs::path &outputFile, const std::string &cmd)
@@ -62,11 +81,11 @@ TEST(CLI, HelpAndVerbFlow)
     std::ofstream(root / "alpha.txt") << "v1";
   }
 
-  EXPECT_EQ(RunCommand(std::string(bin) + " help > /dev/null"), 0);
+  EXPECT_EQ(RunCommand(std::string(bin) + " help" + NullRedirect()), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + root.string()), 0);
-  EXPECT_EQ(RunCommand(std::string(bin) + " versions --archive " + archive.string() + " --path alpha.txt > /dev/null"), 0);
+  EXPECT_EQ(RunCommand(std::string(bin) + " versions --archive " + archive.string() + " --path alpha.txt" + NullRedirect()), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " props set --archive " + archive.string() + " --ref alpha.txt@1 --name answer --type int --value 42"), 0);
-  EXPECT_EQ(RunCommand(std::string(bin) + " props get --archive " + archive.string() + " --ref alpha.txt@1 --name ANSWER > /dev/null"), 0);
+  EXPECT_EQ(RunCommand(std::string(bin) + " props get --archive " + archive.string() + " --ref alpha.txt@1 --name ANSWER" + NullRedirect()), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " get --archive " + archive.string() + " --ref alpha.txt --out " + out.string() + " --mode readonly-copy"), 0);
   EXPECT_TRUE(fs::exists(out / "alpha.txt"));
 }
@@ -176,10 +195,10 @@ TEST(CLI, ImportRejectsTamperedReadonlyAndUnlockClearsLock)
 
   fs::permissions(readonlyWs / "alpha.txt", fs::perms::owner_write, fs::perm_options::add);
   std::ofstream(readonlyWs / "alpha.txt") << "bad";
-  EXPECT_NE(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + readonlyWs.string() + " > /dev/null 2>&1"), 0);
+  EXPECT_NE(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + readonlyWs.string() + NullRedirectBoth()), 0);
 
   ASSERT_EQ(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + editWs.string() + " --user simo --environment ws1"), 0);
-  EXPECT_NE(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + otherWs.string() + " --user other --environment ws2 > /dev/null 2>&1"), 0);
+  EXPECT_NE(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + otherWs.string() + " --user other --environment ws2" + NullRedirectBoth()), 0);
   ASSERT_EQ(RunCommand(std::string(bin) + " unlock --archive " + archive.string() + " --ref alpha.txt"), 0);
   ASSERT_EQ(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + otherWs.string() + " --user other --environment ws2"), 0);
 }

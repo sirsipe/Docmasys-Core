@@ -6,6 +6,7 @@
 #include <future>
 #include <vector>
 #include <atomic>
+#include <chrono>
 
 #include "../CAS/CAS.hpp" // your header
 
@@ -38,7 +39,8 @@ struct TempDir
     auto base = fs::temp_directory_path();
     for (int i = 0; i < 1000; ++i)
     {
-      auto cand = base / ("cas_test_" + std::to_string(::getpid()) + "_" + std::to_string(i));
+      const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+      auto cand = base / ("cas_test_" + unique + "_" + std::to_string(i));
       if (fs::create_directory(cand))
       {
         dir = cand;
