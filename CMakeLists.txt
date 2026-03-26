@@ -6,13 +6,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenSSL REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 find_package(SQLite3 REQUIRED)
+
+if(WIN32)
+  find_package(zstd CONFIG REQUIRED)
+  set(DOCMASYS_ZSTD_TARGET zstd::libzstd)
+else()
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+  set(DOCMASYS_ZSTD_TARGET PkgConfig::ZSTD)
+endif()
 
 add_library(DocmasysCAS src/CAS/CAS.cpp)
 target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(DocmasysCAS PUBLIC OpenSSL::Crypto PkgConfig::ZSTD)
+target_link_libraries(DocmasysCAS PUBLIC OpenSSL::Crypto ${DOCMASYS_ZSTD_TARGET})
 
 add_library(DocmasysCore
   src/DB/Database.cpp

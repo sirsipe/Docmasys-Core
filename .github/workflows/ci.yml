@@ -45,8 +45,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $env:RUNNER_TEMP/vcpkg
+          & $env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat
+          & $env:RUNNER_TEMP/vcpkg/vcpkg.exe install zstd:x64-windows
+
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="$env:RUNNER_TEMP/vcpkg/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build build --config Release
