@@ -49,7 +49,7 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg.git $env:RUNNER_TEMP/vcpkg
           & $env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat
-          & $env:RUNNER_TEMP/vcpkg/vcpkg.exe install zstd:x64-windows
+          & $env:RUNNER_TEMP/vcpkg/vcpkg.exe install zstd:x64-windows sqlite3:x64-windows
 
       - name: Configure
         run: >

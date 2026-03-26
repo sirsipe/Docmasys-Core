@@ -6,14 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenSSL REQUIRED)
-find_package(SQLite3 REQUIRED)
 
 if(WIN32)
+  find_package(unofficial-sqlite3 CONFIG REQUIRED)
   find_package(zstd CONFIG REQUIRED)
+  set(DOCMASYS_SQLITE_TARGET unofficial::sqlite3::sqlite3)
   set(DOCMASYS_ZSTD_TARGET zstd::libzstd)
 else()
+  find_package(SQLite3 REQUIRED)
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+  set(DOCMASYS_SQLITE_TARGET SQLite::SQLite3)
   set(DOCMASYS_ZSTD_TARGET PkgConfig::ZSTD)
 endif()
 
@@ -27,7 +30,7 @@ add_library(DocmasysCore
   src/Vault.cpp
 )
 target_include_directories(DocmasysCore PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(DocmasysCore PUBLIC DocmasysCAS SQLite::SQLite3)
+target_link_libraries(DocmasysCore PUBLIC DocmasysCAS ${DOCMASYS_SQLITE_TARGET})
 
 add_executable(Docmasys src/main.cpp)
 target_link_libraries(Docmasys PRIVATE DocmasysCore)
