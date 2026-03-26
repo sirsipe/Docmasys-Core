@@ -392,6 +392,23 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Continuous integration
+
+GitHub Actions CI is configured in:
+
+```text
+.github/workflows/ci.yml
+```
+
+Current pipeline:
+
+- runs on push and pull request
+- builds on Ubuntu
+- installs required native dependencies
+- configures with CMake
+- builds the project
+- runs the full CTest suite
+
 ## Current limitations
 
 - `inspect` is intentionally lightweight
