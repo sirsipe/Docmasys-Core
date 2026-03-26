@@ -332,6 +332,11 @@ void Docmasys::CAS::Retrieve(const fs::path &root, const Identity &identity, con
   }
 }
 
+std::filesystem::path Docmasys::CAS::BlobPath(const fs::path &root, const Identity &identity)
+{
+  return ::CASLocation(ObjectStore(root), identity);
+}
+
 void Docmasys::CAS::Delete(const fs::path &root, const Identity &identity)
 {
   const fs::path objectStore = ObjectStore(root);

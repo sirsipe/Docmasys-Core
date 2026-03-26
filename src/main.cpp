@@ -46,6 +46,36 @@ std::string ToString(DB::RelationType type)
   throw std::runtime_error("unknown relation type");
 }
 
+std::string ToString(DB::MaterializationKind kind)
+{
+  switch (kind)
+  {
+  case DB::MaterializationKind::ReadOnlyCopy:
+    return "readonly-copy";
+  case DB::MaterializationKind::ReadOnlySymlink:
+    return "readonly-symlink";
+  case DB::MaterializationKind::CheckoutCopy:
+    return "checkout-copy";
+  }
+  throw std::runtime_error("unknown materialization kind");
+}
+
+std::string ToString(DB::WorkspaceEntryState state)
+{
+  switch (state)
+  {
+  case DB::WorkspaceEntryState::Ok:
+    return "ok";
+  case DB::WorkspaceEntryState::Missing:
+    return "missing";
+  case DB::WorkspaceEntryState::Modified:
+    return "modified";
+  case DB::WorkspaceEntryState::Replaced:
+    return "replaced";
+  }
+  throw std::runtime_error("unknown workspace state");
+}
+
 std::string ToString(PropertyValueType type)
 {
   switch (type)
@@ -82,6 +112,14 @@ DB::RelationScope ParseScope(const std::string &value)
   if (value == "strong+weak") return DB::RelationScope::StrongAndWeak;
   if (value == "all") return DB::RelationScope::All;
   throw std::runtime_error("invalid scope: " + value);
+}
+
+DB::MaterializationKind ParseMaterializationKind(const std::string &value)
+{
+  if (value == "readonly-copy") return DB::MaterializationKind::ReadOnlyCopy;
+  if (value == "readonly-symlink") return DB::MaterializationKind::ReadOnlySymlink;
+  if (value == "checkout-copy") return DB::MaterializationKind::CheckoutCopy;
+  throw std::runtime_error("invalid materialization kind: " + value);
 }
 
 PropertyValue ParsePropertyValue(const std::string &type, const std::string &value)
@@ -235,10 +273,16 @@ std::vector<RelationSpec> CollectRelationSpecs(const Options &options)
 void PrintUsage(const std::string &programName)
 {
   std::cout << "Docmasys CLI\n\n";
+  std::cout << "Archive / workspace engine with immutable versions, relations, properties, and explicit checkout flow.\n\n";
   std::cout << "Usage:\n";
   std::cout << "  " << programName << " help\n";
   std::cout << "  " << programName << " import --archive <archive> --root <folder>\n";
-  std::cout << "  " << programName << " get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all]\n";
+  std::cout << "  " << programName << " get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all] [--mode readonly-copy|readonly-symlink]\n";
+  std::cout << "  " << programName << " checkout --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --out <folder> --user <user> --environment <environment> [--scope none|strong|strong+weak|all]\n";
+  std::cout << "  " << programName << " checkin --archive <archive> (--ref <path> | --refs-file <file>)... --root <folder> --user <user> --environment <environment> [--keep-lock true|false]\n";
+  std::cout << "  " << programName << " unlock --archive <archive> (--ref <path> | --refs-file <file>)...\n";
+  std::cout << "  " << programName << " status --archive <archive> --root <folder>\n";
+  std::cout << "  " << programName << " repair --archive <archive> --root <folder>\n";
   std::cout << "  " << programName << " versions --archive <archive> (--path <path> | --paths-file <file>)...\n";
   std::cout << "  " << programName << " relate --archive <archive> [--from <path[@version]> --to <path[@version]> --type strong|weak|optional]... [--edges-file <file>]\n";
   std::cout << "  " << programName << " relations --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--type strong|weak|optional|all]\n";
@@ -246,7 +290,22 @@ void PrintUsage(const std::string &programName)
   std::cout << "  " << programName << " props get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>\n";
   std::cout << "  " << programName << " props set --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property> --type string|int|bool --value <value>\n";
   std::cout << "  " << programName << " props remove --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --name <property>\n";
-  std::cout << "  " << programName << " inspect --archive <archive> [--root <folder>]\n";
+  std::cout << "  " << programName << " locks list --archive <archive>\n";
+  std::cout << "  " << programName << " inspect --archive <archive> [--root <folder>]\n\n";
+
+  std::cout << "Common flows:\n";
+  std::cout << "  Import folder into archive\n";
+  std::cout << "    " << programName << " import --archive ./archive --root ./source\n\n";
+  std::cout << "  Materialize readonly view\n";
+  std::cout << "    " << programName << " get --archive ./archive --ref docs/readme.txt --out ./ws --mode readonly-copy\n\n";
+  std::cout << "  Checkout, edit, and check in\n";
+  std::cout << "    " << programName << " checkout --archive ./archive --ref docs/readme.txt --out ./ws --user alice --environment laptop\n";
+  std::cout << "    " << programName << " checkin  --archive ./archive --root ./ws --ref docs/readme.txt --user alice --environment laptop\n\n";
+  std::cout << "Notes:\n";
+  std::cout << "  - Paths are vault-relative; ROOT/ prefix is optional in input.\n";
+  std::cout << "  - Omitting @version means latest version.\n";
+  std::cout << "  - checkin/unlock accept logical paths only, not @version selectors.\n";
+  std::cout << "  - status states: ok, missing, modified, replaced.\n";
 }
 
 int RunImport(const Options &options)
@@ -265,14 +324,104 @@ int RunGet(const Options &options)
 
   Vault vault(out, archive);
   const auto scope = ParseScope(OptionalValue(options, "scope").value_or("none"));
+  const auto kind = ParseMaterializationKind(OptionalValue(options, "mode").value_or("readonly-copy"));
+  if (kind == DB::MaterializationKind::CheckoutCopy)
+    throw std::runtime_error("get does not accept checkout-copy mode; use checkout verb");
   for (const auto &rawRef : refs)
   {
     const auto ref = ParseRef(rawRef);
     vault.Pop(MaterializationOptions{
         .RelativeFilePath = NormalizeVaultPath(ref.Path),
         .VersionNumber = ref.Version,
-        .RelationScope = scope});
+        .RelationScope = scope,
+        .Kind = kind});
   }
+  return 0;
+}
+
+int RunCheckout(const Options &options)
+{
+  const auto archive = fs::path(Require(options, "archive"));
+  const auto out = fs::path(Require(options, "out"));
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("checkout requires at least one --ref or --refs-file");
+
+  Vault vault(out, archive);
+  const auto scope = ParseScope(OptionalValue(options, "scope").value_or("none"));
+  const auto user = Require(options, "user");
+  const auto environment = Require(options, "environment");
+  for (const auto &rawRef : refs)
+  {
+    const auto ref = ParseRef(rawRef);
+    vault.Checkout(CheckoutOptions{
+        .RelativeFilePath = NormalizeVaultPath(ref.Path),
+        .VersionNumber = ref.Version,
+        .RelationScope = scope,
+        .User = user,
+        .Environment = environment});
+  }
+  return 0;
+}
+
+int RunCheckin(const Options &options)
+{
+  const auto archive = fs::path(Require(options, "archive"));
+  const auto root = fs::path(Require(options, "root"));
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("checkin requires at least one --ref or --refs-file");
+
+  Vault vault(root, archive);
+  const auto user = Require(options, "user");
+  const auto environment = Require(options, "environment");
+  const bool releaseLock = OptionalValue(options, "keep-lock").value_or("false") != "true";
+  for (const auto &rawRef : refs)
+  {
+    const auto ref = ParseRef(rawRef);
+    if (ref.Version)
+      throw std::runtime_error("checkin does not accept @version selectors");
+    vault.Checkin(CheckinOptions{
+        .RelativeFilePath = ref.Path,
+        .User = user,
+        .Environment = environment,
+        .ReleaseLock = releaseLock});
+  }
+  return 0;
+}
+
+int RunUnlock(const Options &options)
+{
+  const auto archive = fs::path(Require(options, "archive"));
+  const auto refs = CollectBatchValues(options, "ref", "refs-file");
+  if (refs.empty())
+    throw std::runtime_error("unlock requires at least one --ref or --refs-file");
+
+  Vault vault(".", archive);
+  for (const auto &rawRef : refs)
+  {
+    const auto ref = ParseRef(rawRef);
+    if (ref.Version)
+      throw std::runtime_error("unlock does not accept @version selectors");
+    vault.Unlock(ref.Path);
+  }
+  return 0;
+}
+
+int RunStatus(const Options &options)
+{
+  Vault vault(fs::path(Require(options, "root")), fs::path(Require(options, "archive")));
+  for (const auto &status : vault.Status())
+    std::cout << status.Entry.RelativePath.generic_string() << '\t'
+              << ToString(status.Entry.Kind) << '\t'
+              << ToString(status.State) << '\t'
+              << status.Entry.Version->VersionNumber << "\n";
+  return 0;
+}
+
+int RunRepair(const Options &options)
+{
+  Vault(fs::path(Require(options, "root")), fs::path(Require(options, "archive"))).Repair();
   return 0;
 }
 
@@ -384,6 +533,18 @@ int RunProps(const std::string &subcommand, const Options &options)
   return 0;
 }
 
+int RunLocks(const std::string &subcommand, const Options &options)
+{
+  auto db = DB::Database::Open(fs::path(Require(options, "archive")) / "content.db", ".");
+  if (subcommand != "list")
+    throw std::runtime_error("unknown locks subcommand: " + subcommand);
+  for (const auto &lock : db->ListCheckoutLocks())
+    std::cout << db->BuildRelativePath(lock.LogicalFile).generic_string() << '\t'
+              << lock.User << '\t' << lock.Environment << '\t'
+              << lock.WorkspaceRoot.generic_string() << "\n";
+  return 0;
+}
+
 int RunInspect(const Options &options)
 {
   const auto archive = fs::path(Require(options, "archive"));
@@ -419,9 +580,21 @@ int main(int argc, char *argv[])
       return RunProps(argv[2], ParseOptions(argc, argv, 3));
     }
 
+    if (command == "locks")
+    {
+      if (argc < 3)
+        throw std::runtime_error("locks requires a subcommand");
+      return RunLocks(argv[2], ParseOptions(argc, argv, 3));
+    }
+
     const auto options = ParseOptions(argc, argv, 2);
     if (command == "import") return RunImport(options);
     if (command == "get") return RunGet(options);
+    if (command == "checkout") return RunCheckout(options);
+    if (command == "checkin") return RunCheckin(options);
+    if (command == "unlock") return RunUnlock(options);
+    if (command == "status") return RunStatus(options);
+    if (command == "repair") return RunRepair(options);
     if (command == "versions") return RunVersions(options);
     if (command == "relate") return RunRelate(options);
     if (command == "relations") return RunRelations(options);

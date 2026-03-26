@@ -10,6 +10,8 @@ namespace Docmasys::DB
   enum class BlobStatus : std::uint8_t { Pending = 0, Ready = 1 };
   enum class RelationType : std::uint8_t { Strong = 0, Weak = 1, Optional = 2 };
   enum class RelationScope : std::uint8_t { None = 0, Strong = 1, StrongAndWeak = 2, All = 3 };
+  enum class MaterializationKind : std::uint8_t { ReadOnlyCopy = 0, ReadOnlySymlink = 1, CheckoutCopy = 2 };
+  enum class WorkspaceEntryState : std::uint8_t { Ok = 0, Missing = 1, Modified = 2, Replaced = 3 };
 
   struct Blob { Blob(const ID &id, const Identity &hash, const BlobStatus &status): Id(id), Hash(hash), Status(status) {} ID Id{}; Identity Hash{}; BlobStatus Status{BlobStatus::Pending}; };
   struct Folder { Folder(ID id, std::optional<ID> parent_id, const std::string &name): Id(id), ParentId(parent_id), Name(name) {} ID Id{}; std::optional<ID> ParentId; std::string Name; };
@@ -18,8 +20,27 @@ namespace Docmasys::DB
   struct MaterializedFile { std::shared_ptr<File> LogicalFile; std::shared_ptr<FileVersion> Version; std::shared_ptr<Blob> BlobRef; std::filesystem::path RelativePath; };
   struct ImportResult { std::shared_ptr<FileVersion> Version; bool CreatedNewVersion{false}; };
   struct VersionProperty { ID VersionId{}; std::string Name; PropertyValueType Type{PropertyValueType::String}; PropertyValue Value{std::string{}}; };
+  struct WorkspaceEntry
+  {
+    std::filesystem::path RelativePath;
+    std::shared_ptr<File> LogicalFile;
+    std::shared_ptr<FileVersion> Version;
+    MaterializationKind Kind{MaterializationKind::ReadOnlyCopy};
+  };
+  struct CheckoutLock
+  {
+    std::shared_ptr<File> LogicalFile;
+    std::string User;
+    std::string Environment;
+    std::filesystem::path WorkspaceRoot;
+  };
+  struct WorkspaceEntryStatus
+  {
+    WorkspaceEntry Entry;
+    WorkspaceEntryState State{WorkspaceEntryState::Ok};
+  };
 
-  static constexpr int DB_SCHEMA_VERSION = 2;
+  static constexpr int DB_SCHEMA_VERSION = 3;
   inline constexpr const char DB_SCHEMA_LEGACY[] = R"SQL(
     CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, hash BLOB NOT NULL CHECK (length(hash) = 32), status INT NOT NULL CHECK (status IN (0,1)), UNIQUE(hash));
     CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE);
@@ -55,5 +76,22 @@ namespace Docmasys::DB
       PRIMARY KEY(version_id, normalized_name)
     );
     CREATE INDEX IF NOT EXISTS idx_version_properties_version ON version_properties(version_id);
+    CREATE TABLE IF NOT EXISTS workspace_entries (
+      workspace_root TEXT NOT NULL,
+      file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      version_id INTEGER NOT NULL REFERENCES file_versions(id) ON DELETE CASCADE,
+      relative_path TEXT NOT NULL,
+      materialization_kind INTEGER NOT NULL CHECK (materialization_kind IN (0,1,2)),
+      PRIMARY KEY(workspace_root, file_id),
+      UNIQUE(workspace_root, relative_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_entries_workspace ON workspace_entries(workspace_root);
+    CREATE TABLE IF NOT EXISTS checkout_locks (
+      file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+      version_id INTEGER NOT NULL REFERENCES file_versions(id) ON DELETE CASCADE,
+      user_name TEXT NOT NULL,
+      environment_name TEXT NOT NULL,
+      workspace_root TEXT NOT NULL
+    );
   )SQL";
 }

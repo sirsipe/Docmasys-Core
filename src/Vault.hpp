@@ -12,6 +12,24 @@ namespace Docmasys
     std::filesystem::path RelativeFilePath;
     std::optional<std::int64_t> VersionNumber;
     DB::RelationScope RelationScope{DB::RelationScope::None};
+    DB::MaterializationKind Kind{DB::MaterializationKind::ReadOnlyCopy};
+  };
+
+  struct CheckoutOptions
+  {
+    std::filesystem::path RelativeFilePath;
+    std::optional<std::int64_t> VersionNumber;
+    DB::RelationScope RelationScope{DB::RelationScope::None};
+    std::string User;
+    std::string Environment;
+  };
+
+  struct CheckinOptions
+  {
+    std::filesystem::path RelativeFilePath;
+    std::string User;
+    std::string Environment;
+    bool ReleaseLock{true};
   };
 
   class Vault
@@ -21,10 +39,15 @@ namespace Docmasys
     void Push();
     void Pop();
     void Pop(const MaterializationOptions &options);
+    void Checkout(const CheckoutOptions &options);
+    void Checkin(const CheckinOptions &options);
+    std::vector<DB::WorkspaceEntryStatus> Status() const;
+    void Repair();
+    void Unlock(const std::filesystem::path &relativeFilePath);
 
   private:
-    void MaterializeFiles(const std::vector<DB::MaterializedFile> &files);
-    void MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const std::filesystem::path &localFolder);
+    void MaterializeFiles(const std::vector<DB::MaterializedFile> &files, DB::MaterializationKind kind);
+    void MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const std::filesystem::path &localFolder, DB::MaterializationKind kind);
 
     std::unique_ptr<DB::Database> m_Database;
     const std::filesystem::path m_LocalRoot;

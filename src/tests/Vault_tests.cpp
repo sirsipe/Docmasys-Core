@@ -149,11 +149,141 @@ TEST(Vault, PopMaterializesSelectedVersionClosure)
   sourceVault.Push();
 
   Vault outVault(output, archive);
-  outVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("app.txt"), .VersionNumber = 1, .RelationScope = DB::RelationScope::Strong});
+  outVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("app.txt"), .VersionNumber = 1, .RelationScope = DB::RelationScope::Strong, .Kind = DB::MaterializationKind::ReadOnlyCopy});
 
   EXPECT_EQ(ReadFile(output / "app.txt"), "v1");
   EXPECT_EQ(ReadFile(output / "dep.txt"), "dep-v1");
   EXPECT_FALSE(fs::exists(output / "ROOT"));
+}
+
+TEST(Vault, CheckoutLocksFileAndMaterializesWritableCopy)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  auto output = td.dir / "output";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+  fs::create_directories(output);
+
+  Vault sourceVault(source, archive);
+  MakeFile(source / "part.txt", "v1");
+  sourceVault.Push();
+
+  Vault outVault(output, archive);
+  outVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("part.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "simo", .Environment = "ws1"});
+
+  EXPECT_EQ(ReadFile(output / "part.txt"), "v1");
+
+  auto db = DB::Database::Open(archive / "content.db", output);
+  auto file = db->GetFileByRelativePath("ROOT/part.txt");
+  auto lock = db->GetCheckoutLock(file);
+  ASSERT_TRUE(lock.has_value());
+  EXPECT_EQ(lock->User, "simo");
+  EXPECT_EQ(lock->Environment, "ws1");
+
+  auto entry = db->GetWorkspaceEntry(output, file);
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_EQ(entry->Kind, DB::MaterializationKind::CheckoutCopy);
+}
+
+TEST(Vault, ReadOnlySymlinkMaterializationTracksWorkspace)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  auto output = td.dir / "output";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+  fs::create_directories(output);
+
+  Vault sourceVault(source, archive);
+  MakeFile(source / "view.txt", "hello");
+  sourceVault.Push();
+
+  Vault outVault(output, archive);
+  outVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("view.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .Kind = DB::MaterializationKind::ReadOnlySymlink});
+
+  EXPECT_TRUE(fs::is_symlink(output / "view.txt"));
+
+  auto db = DB::Database::Open(archive / "content.db", output);
+  auto file = db->GetFileByRelativePath("ROOT/view.txt");
+  auto entry = db->GetWorkspaceEntry(output, file);
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_EQ(entry->Kind, DB::MaterializationKind::ReadOnlySymlink);
+}
+
+TEST(Vault, StatusRepairAndCheckinFlow)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  auto readonlyRoot = td.dir / "readonly";
+  auto checkoutRoot = td.dir / "checkout";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+  fs::create_directories(readonlyRoot);
+  fs::create_directories(checkoutRoot);
+
+  Vault sourceVault(source, archive);
+  MakeFile(source / "doc.txt", "v1");
+  sourceVault.Push();
+
+  Vault readonlyVault(readonlyRoot, archive);
+  readonlyVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .Kind = DB::MaterializationKind::ReadOnlyCopy});
+  fs::permissions(readonlyRoot / "doc.txt", fs::perms::owner_write, fs::perm_options::add);
+  MakeFile(readonlyRoot / "doc.txt", "tampered");
+
+  const auto readonlyStatus = readonlyVault.Status();
+  ASSERT_EQ(readonlyStatus.size(), 1u);
+  EXPECT_EQ(readonlyStatus.front().State, DB::WorkspaceEntryState::Modified);
+
+  readonlyVault.Repair();
+  EXPECT_EQ(ReadFile(readonlyRoot / "doc.txt"), "v1");
+
+  Vault checkoutVault(checkoutRoot, archive);
+  checkoutVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "simo", .Environment = "ws1"});
+  MakeFile(checkoutRoot / "doc.txt", "v2");
+  checkoutVault.Checkin(CheckinOptions{.RelativeFilePath = fs::path("doc.txt"), .User = "simo", .Environment = "ws1", .ReleaseLock = true});
+
+  auto db = DB::Database::Open(archive / "content.db", checkoutRoot);
+  auto file = db->GetFileByRelativePath("ROOT/doc.txt");
+  auto versions = db->GetFileVersions(file);
+  ASSERT_EQ(versions.size(), 2u);
+  EXPECT_EQ(versions.back()->VersionNumber, 2);
+  EXPECT_FALSE(db->GetCheckoutLock(file).has_value());
+}
+
+TEST(Vault, PushRejectsTamperedReadonlyFilesAndUnlockCanClearStaleLock)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  auto readonlyRoot = td.dir / "readonly";
+  auto checkoutRoot = td.dir / "checkout";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+  fs::create_directories(readonlyRoot);
+  fs::create_directories(checkoutRoot);
+
+  Vault sourceVault(source, archive);
+  MakeFile(source / "doc.txt", "v1");
+  sourceVault.Push();
+
+  Vault readonlyVault(readonlyRoot, archive);
+  readonlyVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .Kind = DB::MaterializationKind::ReadOnlyCopy});
+  fs::permissions(readonlyRoot / "doc.txt", fs::perms::owner_write, fs::perm_options::add);
+  MakeFile(readonlyRoot / "doc.txt", "evil");
+  EXPECT_THROW(readonlyVault.Push(), std::runtime_error);
+
+  Vault checkoutVault(checkoutRoot, archive);
+  checkoutVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "simo", .Environment = "ws1"});
+
+  Vault otherVault(td.dir / "other", archive);
+  EXPECT_THROW(otherVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "other", .Environment = "ws2"}), std::runtime_error);
+
+  otherVault.Unlock(fs::path("doc.txt"));
+  EXPECT_NO_THROW(otherVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "other", .Environment = "ws2"}));
 }
 
 TEST(Vault, ImportExtensionsCanAttachPropertiesAndRelations)

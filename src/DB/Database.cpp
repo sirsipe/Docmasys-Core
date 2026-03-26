@@ -1,4 +1,5 @@
 #include "Database.hpp"
+#include "../CAS/CAS.hpp"
 #include <algorithm>
 #include <cstring>
 #include <sqlite3.h>
@@ -105,6 +106,62 @@ MaterializedFile ReadMaterializedFile(sqlite3_stmt *st)
   auto blob = std::make_shared<Blob>(sqlite3_column_int64(st, 8), ReadBlob(st, 9), static_cast<BlobStatus>(sqlite3_column_int64(st, 10)));
   return MaterializedFile{file, ver, blob, {}};
 }
+
+std::string NormalizeWorkspaceRoot(const fs::path &path)
+{
+  return fs::weakly_canonical(path).generic_string();
+}
+
+WorkspaceEntry ReadWorkspaceEntry(sqlite3_stmt *st)
+{
+  auto file = std::make_shared<File>(sqlite3_column_int64(st, 0), OptId(st, 1), std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 2))), OptId(st, 3));
+  auto version = std::make_shared<FileVersion>(sqlite3_column_int64(st, 4), sqlite3_column_int64(st, 5), sqlite3_column_int64(st, 6), sqlite3_column_int64(st, 7));
+  return WorkspaceEntry{
+      fs::path(reinterpret_cast<const char *>(sqlite3_column_text(st, 8))),
+      file,
+      version,
+      static_cast<MaterializationKind>(sqlite3_column_int(st, 9))};
+}
+
+CheckoutLock ReadCheckoutLock(sqlite3_stmt *st)
+{
+  auto file = std::make_shared<File>(sqlite3_column_int64(st, 0), OptId(st, 1), std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 2))), OptId(st, 3));
+  return CheckoutLock{
+      file,
+      std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 4))),
+      std::string(reinterpret_cast<const char *>(sqlite3_column_text(st, 5))),
+      fs::path(reinterpret_cast<const char *>(sqlite3_column_text(st, 6)))};
+}
+
+WorkspaceEntryState DetectWorkspaceState(const fs::path &workspaceRoot, const fs::path &archiveRoot, const WorkspaceEntry &entry, const Identity &expectedHash)
+{
+  const auto fullPath = workspaceRoot / entry.RelativePath;
+  std::error_code ec;
+  const bool exists = fs::exists(fullPath, ec);
+  const bool symlink = fs::is_symlink(fullPath, ec);
+  if (!exists && !symlink)
+    return WorkspaceEntryState::Missing;
+
+  if (entry.Kind == MaterializationKind::ReadOnlySymlink)
+  {
+    if (!symlink)
+      return WorkspaceEntryState::Replaced;
+    const auto target = fs::read_symlink(fullPath, ec);
+    if (ec)
+      return WorkspaceEntryState::Replaced;
+    if (fs::weakly_canonical(target, ec) != fs::weakly_canonical(CAS::BlobPath(archiveRoot, expectedHash), ec))
+      return WorkspaceEntryState::Replaced;
+    return WorkspaceEntryState::Ok;
+  }
+
+  if (symlink)
+    return WorkspaceEntryState::Replaced;
+
+  const auto actualHash = CAS::Identify(fullPath);
+  if (actualHash != expectedHash)
+    return entry.Kind == MaterializationKind::CheckoutCopy ? WorkspaceEntryState::Modified : WorkspaceEntryState::Modified;
+  return WorkspaceEntryState::Ok;
+}
 } // namespace
 
 struct Database::Impl
@@ -130,7 +187,7 @@ Database::Database(const fs::path &databaseFile, const fs::path &localVaultRoot)
   MigrateLegacySchemaIfNeeded();
   MigrateSchemaIfNeeded();
   ExecSQL(DB_SCHEMA);
-  ExecSQL("PRAGMA user_version = 2;");
+  ExecSQL("PRAGMA user_version = 3;");
 }
 
 Database::~Database() = default;
@@ -200,7 +257,29 @@ void Database::MigrateSchemaIfNeeded()
         CREATE INDEX IF NOT EXISTS idx_version_properties_version ON version_properties(version_id);
       )SQL");
     }
-    ExecSQL("PRAGMA user_version = 2;");
+    if (version < 3)
+    {
+      ExecSQL(R"SQL(
+        CREATE TABLE IF NOT EXISTS workspace_entries (
+          workspace_root TEXT NOT NULL,
+          file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+          version_id INTEGER NOT NULL REFERENCES file_versions(id) ON DELETE CASCADE,
+          relative_path TEXT NOT NULL,
+          materialization_kind INTEGER NOT NULL CHECK (materialization_kind IN (0,1,2)),
+          PRIMARY KEY(workspace_root, file_id),
+          UNIQUE(workspace_root, relative_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_entries_workspace ON workspace_entries(workspace_root);
+        CREATE TABLE IF NOT EXISTS checkout_locks (
+          file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+          version_id INTEGER NOT NULL REFERENCES file_versions(id) ON DELETE CASCADE,
+          user_name TEXT NOT NULL,
+          environment_name TEXT NOT NULL,
+          workspace_root TEXT NOT NULL
+        );
+      )SQL");
+    }
+    ExecSQL("PRAGMA user_version = 3;");
     Commit();
   }
   catch (...)
@@ -674,6 +753,220 @@ bool Database::RemoveVersionProperty(const std::shared_ptr<FileVersion> &version
   const auto changed = sqlite3_changes(m_Database->m_db) > 0;
   sqlite3_finalize(st);
   return changed;
+}
+
+void Database::UpsertWorkspaceEntry(const fs::path &workspaceRoot,
+                                    const std::shared_ptr<File> &file,
+                                    const std::shared_ptr<FileVersion> &version,
+                                    const fs::path &relativePath,
+                                    MaterializationKind kind)
+{
+  const auto workspace = NormalizeWorkspaceRoot(workspaceRoot);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    INSERT INTO workspace_entries(workspace_root,file_id,version_id,relative_path,materialization_kind)
+    VALUES(?1,?2,?3,?4,?5)
+    ON CONFLICT(workspace_root, file_id) DO UPDATE SET
+      version_id=excluded.version_id,
+      relative_path=excluded.relative_path,
+      materialization_kind=excluded.materialization_kind;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_text(st, 1, workspace.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(st, 2, file->Id);
+  sqlite3_bind_int64(st, 3, version->Id);
+  const auto rel = relativePath.generic_string();
+  sqlite3_bind_text(st, 4, rel.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(st, 5, static_cast<int>(kind));
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  sqlite3_finalize(st);
+}
+
+std::optional<WorkspaceEntry> Database::GetWorkspaceEntry(const fs::path &workspaceRoot, const std::shared_ptr<File> &file)
+{
+  const auto workspace = NormalizeWorkspaceRoot(workspaceRoot);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    SELECT f.id,f.parent_id,f.name,f.current_version_id,
+           fv.id,fv.file_id,fv.blob_id,fv.version_number,
+           we.relative_path,we.materialization_kind
+    FROM workspace_entries we
+    JOIN files f ON f.id=we.file_id
+    JOIN file_versions fv ON fv.id=we.version_id
+    WHERE we.workspace_root=?1 AND we.file_id=?2;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_text(st, 1, workspace.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int64(st, 2, file->Id);
+  if (sqlite3_step(st) != SQLITE_ROW)
+  {
+    sqlite3_finalize(st);
+    return std::nullopt;
+  }
+  auto entry = ReadWorkspaceEntry(st);
+  sqlite3_finalize(st);
+  return entry;
+}
+
+std::vector<WorkspaceEntry> Database::ListWorkspaceEntries(const fs::path &workspaceRoot)
+{
+  const auto workspace = NormalizeWorkspaceRoot(workspaceRoot);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    SELECT f.id,f.parent_id,f.name,f.current_version_id,
+           fv.id,fv.file_id,fv.blob_id,fv.version_number,
+           we.relative_path,we.materialization_kind
+    FROM workspace_entries we
+    JOIN files f ON f.id=we.file_id
+    JOIN file_versions fv ON fv.id=we.version_id
+    WHERE we.workspace_root=?1
+    ORDER BY we.relative_path;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_text(st, 1, workspace.c_str(), -1, SQLITE_TRANSIENT);
+  std::vector<WorkspaceEntry> out;
+  while (sqlite3_step(st) == SQLITE_ROW)
+    out.push_back(ReadWorkspaceEntry(st));
+  sqlite3_finalize(st);
+  return out;
+}
+
+void Database::AcquireCheckoutLock(const std::shared_ptr<File> &file,
+                                   const std::shared_ptr<FileVersion> &version,
+                                   const std::string &user,
+                                   const std::string &environment,
+                                   const fs::path &workspaceRoot)
+{
+  if (user.empty())
+    throw std::runtime_error("checkout lock requires user");
+  if (environment.empty())
+    throw std::runtime_error("checkout lock requires environment");
+
+  const auto workspace = NormalizeWorkspaceRoot(workspaceRoot);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    INSERT INTO checkout_locks(file_id,version_id,user_name,environment_name,workspace_root)
+    VALUES(?1,?2,?3,?4,?5)
+    ON CONFLICT(file_id) DO UPDATE SET
+      version_id=excluded.version_id,
+      user_name=excluded.user_name,
+      environment_name=excluded.environment_name,
+      workspace_root=excluded.workspace_root
+    WHERE checkout_locks.user_name=excluded.user_name
+      AND checkout_locks.environment_name=excluded.environment_name
+      AND checkout_locks.workspace_root=excluded.workspace_root;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, file->Id);
+  sqlite3_bind_int64(st, 2, version->Id);
+  sqlite3_bind_text(st, 3, user.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 4, environment.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 5, workspace.c_str(), -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  const auto changed = sqlite3_changes(m_Database->m_db);
+  sqlite3_finalize(st);
+  if (changed == 0)
+  {
+    const auto lock = GetCheckoutLock(file);
+    throw std::runtime_error("file is already checked out by user '" + lock->User + "' in environment '" + lock->Environment + "'");
+  }
+}
+
+std::optional<CheckoutLock> Database::GetCheckoutLock(const std::shared_ptr<File> &file)
+{
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    SELECT f.id,f.parent_id,f.name,f.current_version_id,
+           cl.user_name,cl.environment_name,cl.workspace_root
+    FROM checkout_locks cl
+    JOIN files f ON f.id=cl.file_id
+    WHERE cl.file_id=?1;
+  )SQL", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, file->Id);
+  if (sqlite3_step(st) != SQLITE_ROW)
+  {
+    sqlite3_finalize(st);
+    return std::nullopt;
+  }
+  auto lock = ReadCheckoutLock(st);
+  sqlite3_finalize(st);
+  return lock;
+}
+
+std::vector<CheckoutLock> Database::ListCheckoutLocks()
+{
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, R"SQL(
+    SELECT f.id,f.parent_id,f.name,f.current_version_id,
+           cl.user_name,cl.environment_name,cl.workspace_root
+    FROM checkout_locks cl
+    JOIN files f ON f.id=cl.file_id
+    ORDER BY cl.file_id;
+  )SQL", -1, &st, nullptr);
+  std::vector<CheckoutLock> out;
+  while (sqlite3_step(st) == SQLITE_ROW)
+    out.push_back(ReadCheckoutLock(st));
+  sqlite3_finalize(st);
+  return out;
+}
+
+bool Database::ReleaseCheckoutLock(const std::shared_ptr<File> &file,
+                                   const std::string &user,
+                                   const std::string &environment,
+                                   const fs::path &workspaceRoot)
+{
+  const auto workspace = NormalizeWorkspaceRoot(workspaceRoot);
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, "DELETE FROM checkout_locks WHERE file_id=?1 AND user_name=?2 AND environment_name=?3 AND workspace_root=?4;", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, file->Id);
+  sqlite3_bind_text(st, 2, user.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 3, environment.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(st, 4, workspace.c_str(), -1, SQLITE_TRANSIENT);
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  const auto changed = sqlite3_changes(m_Database->m_db) > 0;
+  sqlite3_finalize(st);
+  return changed;
+}
+
+bool Database::ForceReleaseCheckoutLock(const std::shared_ptr<File> &file)
+{
+  sqlite3_stmt *st = nullptr;
+  sqlite3_prepare_v2(m_Database->m_db, "DELETE FROM checkout_locks WHERE file_id=?1;", -1, &st, nullptr);
+  sqlite3_bind_int64(st, 1, file->Id);
+  if (sqlite3_step(st) != SQLITE_DONE)
+  {
+    const auto msg = std::string(sqlite3_errmsg(m_Database->m_db));
+    sqlite3_finalize(st);
+    throw std::runtime_error(msg);
+  }
+  const auto changed = sqlite3_changes(m_Database->m_db) > 0;
+  sqlite3_finalize(st);
+  return changed;
+}
+
+std::vector<WorkspaceEntryStatus> Database::GetWorkspaceStatus(const fs::path &workspaceRoot)
+{
+  std::vector<WorkspaceEntryStatus> out;
+  const auto archiveRoot = m_DatabaseFile.parent_path();
+  for (const auto &entry : ListWorkspaceEntries(workspaceRoot))
+  {
+    const auto blob = GetBlob(entry.Version->BlobId);
+    out.push_back(WorkspaceEntryStatus{
+        entry,
+        DetectWorkspaceState(workspaceRoot, archiveRoot, entry, blob->Hash)});
+  }
+  return out;
 }
 
 bool Database::TryGetRelativePath(const fs::path &file, fs::path &out) const

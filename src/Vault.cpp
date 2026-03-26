@@ -1,8 +1,43 @@
 #include "Vault.hpp"
 #include "CAS/CAS.hpp"
 
+#include <fstream>
+#include <system_error>
+
 using namespace Docmasys;
 namespace fs = std::filesystem;
+
+namespace
+{
+void RemoveExistingPath(const fs::path &path)
+{
+  std::error_code ec;
+  if (fs::exists(path, ec) || fs::is_symlink(path, ec))
+    fs::remove(path, ec);
+}
+
+void SetReadOnly(const fs::path &path)
+{
+  std::error_code ec;
+  auto perms = fs::status(path, ec).permissions();
+  if (!ec)
+    fs::permissions(path,
+                    perms & ~fs::perms::owner_write & ~fs::perms::group_write & ~fs::perms::others_write,
+                    fs::perm_options::replace,
+                    ec);
+}
+
+void SetWritable(const fs::path &path)
+{
+  std::error_code ec;
+  auto perms = fs::status(path, ec).permissions();
+  if (!ec)
+    fs::permissions(path,
+                    perms | fs::perms::owner_write,
+                    fs::perm_options::replace,
+                    ec);
+}
+}
 
 Vault::Vault(const fs::path &root, const fs::path &archive)
     : m_Database(DB::Database::Open(archive / "content.db", root)),
@@ -14,6 +49,18 @@ Vault::Vault(const fs::path &root, const fs::path &archive)
 
 void Vault::Push()
 {
+  const auto statuses = Status();
+  for (const auto &status : statuses)
+  {
+    if (status.Entry.Kind == DB::MaterializationKind::CheckoutCopy)
+      continue;
+    if (status.State == DB::WorkspaceEntryState::Ok)
+      continue;
+    throw std::runtime_error("workspace contains tampered readonly file '" + status.Entry.RelativePath.generic_string() + "' (" +
+                             (status.State == DB::WorkspaceEntryState::Missing ? "missing" : status.State == DB::WorkspaceEntryState::Modified ? "modified" : "replaced") +
+                             "); use repair or explicit checkout/checkin flow");
+  }
+
   for (const auto &entry : fs::recursive_directory_iterator(m_LocalRoot))
   {
     if (entry.is_directory())
@@ -40,7 +87,7 @@ void Vault::Push()
   }
 }
 
-void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files)
+void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files, DB::MaterializationKind kind)
 {
   for (const auto &entry : files)
   {
@@ -48,23 +95,44 @@ void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files)
       continue;
 
     const auto relative = entry.RelativePath.lexically_relative("ROOT");
-    CAS::Retrieve(m_ArchiveRoot, entry.BlobRef->Hash, m_LocalRoot / relative);
+    const auto outPath = m_LocalRoot / relative;
+    fs::create_directories(outPath.parent_path());
+    RemoveExistingPath(outPath);
+
+    if (kind == DB::MaterializationKind::ReadOnlySymlink)
+    {
+      const auto target = CAS::BlobPath(m_ArchiveRoot, entry.BlobRef->Hash);
+      std::error_code ec;
+      fs::create_symlink(target, outPath, ec);
+      if (ec)
+        throw std::runtime_error("failed to create symlink materialization for '" + relative.generic_string() + "': " + ec.message());
+    }
+    else
+    {
+      CAS::Retrieve(m_ArchiveRoot, entry.BlobRef->Hash, outPath);
+      if (kind == DB::MaterializationKind::ReadOnlyCopy)
+        SetReadOnly(outPath);
+      else
+        SetWritable(outPath);
+    }
+
+    m_Database->UpsertWorkspaceEntry(m_LocalRoot, entry.LogicalFile, entry.Version, relative, kind);
   }
 }
 
-void Vault::MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const fs::path &localFolder)
+void Vault::MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const fs::path &localFolder, DB::MaterializationKind kind)
 {
   fs::create_directories(localFolder);
-  MaterializeFiles(m_Database->GetMaterializedFiles(folder));
+  MaterializeFiles(m_Database->GetMaterializedFiles(folder), kind);
   for (const auto &subfolder : m_Database->GetFolders(folder))
-    MaterializeFolderTree(subfolder, localFolder / subfolder->Name);
+    MaterializeFolderTree(subfolder, localFolder / subfolder->Name, kind);
 }
 
 void Vault::Pop()
 {
   for (const auto &rootFolder : m_Database->GetFolders(nullptr))
     if (rootFolder->Name == "ROOT")
-      MaterializeFolderTree(rootFolder, m_LocalRoot);
+      MaterializeFolderTree(rootFolder, m_LocalRoot, DB::MaterializationKind::ReadOnlyCopy);
 }
 
 void Vault::Pop(const MaterializationOptions &options)
@@ -77,5 +145,110 @@ void Vault::Pop(const MaterializationOptions &options)
 
   const auto file = m_Database->GetFileByRelativePath(relative);
   const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
-  MaterializeFiles(m_Database->ResolveMaterialization(version, options.RelationScope));
+  MaterializeFiles(m_Database->ResolveMaterialization(version, options.RelationScope), options.Kind);
+}
+
+void Vault::Checkout(const CheckoutOptions &options)
+{
+  if (options.User.empty())
+    throw std::runtime_error("checkout requires user");
+  if (options.Environment.empty())
+    throw std::runtime_error("checkout requires environment");
+
+  auto relative = options.RelativeFilePath.lexically_normal();
+  if (relative.empty())
+    throw std::runtime_error("relative file path is required");
+  if (*relative.begin() != fs::path("ROOT"))
+    relative = fs::path("ROOT") / relative;
+
+  const auto file = m_Database->GetFileByRelativePath(relative);
+  const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
+  m_Database->AcquireCheckoutLock(file, version, options.User, options.Environment, m_LocalRoot);
+  MaterializeFiles(m_Database->ResolveMaterialization(version, options.RelationScope), DB::MaterializationKind::CheckoutCopy);
+}
+
+std::vector<DB::WorkspaceEntryStatus> Vault::Status() const
+{
+  return m_Database->GetWorkspaceStatus(m_LocalRoot);
+}
+
+void Vault::Repair()
+{
+  for (const auto &status : Status())
+  {
+    if (status.State == DB::WorkspaceEntryState::Ok)
+      continue;
+    if (status.Entry.Kind == DB::MaterializationKind::CheckoutCopy)
+      continue;
+
+    MaterializeFiles({DB::MaterializedFile{
+        .LogicalFile = status.Entry.LogicalFile,
+        .Version = status.Entry.Version,
+        .BlobRef = m_Database->GetBlob(status.Entry.Version->BlobId),
+        .RelativePath = fs::path("ROOT") / status.Entry.RelativePath}},
+        status.Entry.Kind);
+  }
+}
+
+void Vault::Checkin(const CheckinOptions &options)
+{
+  if (options.User.empty())
+    throw std::runtime_error("checkin requires user");
+  if (options.Environment.empty())
+    throw std::runtime_error("checkin requires environment");
+
+  auto relative = options.RelativeFilePath.lexically_normal();
+  if (relative.empty())
+    throw std::runtime_error("relative file path is required");
+
+  const auto file = m_Database->GetFileByRelativePath(fs::path("ROOT") / relative);
+  const auto entry = m_Database->GetWorkspaceEntry(m_LocalRoot, file);
+  if (!entry)
+    throw std::runtime_error("file is not materialized in this workspace");
+  if (entry->Kind != DB::MaterializationKind::CheckoutCopy)
+    throw std::runtime_error("file is not checked out in this workspace");
+
+  const auto lock = m_Database->GetCheckoutLock(file);
+  if (!lock)
+    throw std::runtime_error("file is not locked for checkout");
+  if (lock->User != options.User || lock->Environment != options.Environment || fs::weakly_canonical(lock->WorkspaceRoot) != fs::weakly_canonical(m_LocalRoot))
+    throw std::runtime_error("checkout lock is owned by a different user/environment/workspace");
+
+  const auto statuses = Status();
+  for (const auto &status : statuses)
+  {
+    if (status.Entry.LogicalFile->Id == file->Id)
+    {
+      if (status.State == DB::WorkspaceEntryState::Missing)
+        throw std::runtime_error("checked out file is missing from workspace");
+      if (status.State == DB::WorkspaceEntryState::Replaced)
+        throw std::runtime_error("checked out file was replaced unexpectedly");
+      break;
+    }
+  }
+
+  const auto fullPath = m_LocalRoot / relative;
+  const auto identity = CAS::Identify(fullPath);
+  const auto import = m_Database->Import(fullPath, identity);
+  const auto blob = m_Database->GetBlob(import.Version->BlobId);
+  if (blob->Status == DB::BlobStatus::Pending)
+  {
+    static_cast<void>(CAS::Store(m_Database->DatabaseFile().parent_path(), fullPath));
+    m_Database->UpdateBlobStatus(blob, DB::BlobStatus::Ready);
+  }
+
+  auto currentVersion = m_Database->GetFileVersion(file, std::nullopt);
+  m_Database->UpsertWorkspaceEntry(m_LocalRoot, file, currentVersion, relative, DB::MaterializationKind::CheckoutCopy);
+  if (options.ReleaseLock)
+    m_Database->ReleaseCheckoutLock(file, options.User, options.Environment, m_LocalRoot);
+}
+
+void Vault::Unlock(const fs::path &relativeFilePath)
+{
+  auto relative = relativeFilePath.lexically_normal();
+  if (relative.empty())
+    throw std::runtime_error("relative file path is required");
+  const auto file = m_Database->GetFileByRelativePath(fs::path("ROOT") / relative);
+  if (!m_Database->ForceReleaseCheckoutLock(file))
+    throw std::runtime_error("file was not locked");
 }

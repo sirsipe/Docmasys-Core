@@ -30,6 +30,10 @@ namespace Docmasys::CAS
       const Identity &identity,
       const std::filesystem::path &outFile);
 
+  [[nodiscard]] std::filesystem::path BlobPath(
+      const std::filesystem::path &root,
+      const Identity &identity);
+
   /// @brief Deletes a file from CAS with given identity.
   /// @param root Full path to the CAS vault root.
   /// @param identity SHA256 identity

@@ -48,6 +48,28 @@ namespace Docmasys::DB
     std::vector<VersionProperty> ListVersionProperties(const std::shared_ptr<FileVersion> &version);
     bool RemoveVersionProperty(const std::shared_ptr<FileVersion> &version, const std::string &name);
 
+    void UpsertWorkspaceEntry(const std::filesystem::path &workspaceRoot,
+                              const std::shared_ptr<File> &file,
+                              const std::shared_ptr<FileVersion> &version,
+                              const std::filesystem::path &relativePath,
+                              MaterializationKind kind);
+    std::optional<WorkspaceEntry> GetWorkspaceEntry(const std::filesystem::path &workspaceRoot,
+                                                    const std::shared_ptr<File> &file);
+    std::vector<WorkspaceEntry> ListWorkspaceEntries(const std::filesystem::path &workspaceRoot);
+    void AcquireCheckoutLock(const std::shared_ptr<File> &file,
+                             const std::shared_ptr<FileVersion> &version,
+                             const std::string &user,
+                             const std::string &environment,
+                             const std::filesystem::path &workspaceRoot);
+    std::optional<CheckoutLock> GetCheckoutLock(const std::shared_ptr<File> &file);
+    std::vector<CheckoutLock> ListCheckoutLocks();
+    bool ReleaseCheckoutLock(const std::shared_ptr<File> &file,
+                             const std::string &user,
+                             const std::string &environment,
+                             const std::filesystem::path &workspaceRoot);
+    bool ForceReleaseCheckoutLock(const std::shared_ptr<File> &file);
+    std::vector<WorkspaceEntryStatus> GetWorkspaceStatus(const std::filesystem::path &workspaceRoot);
+
   private:
     Database(const std::filesystem::path &databaseFile, const std::filesystem::path &localVaultRoot);
     void ExecSQL(const char *sql); void OpenTransaction(); void Commit(); void Rollback(); void MigrateLegacySchemaIfNeeded(); void MigrateSchemaIfNeeded();
