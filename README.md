@@ -119,8 +119,8 @@ erDiagram
     FOLDERS ||--o{ FILES : contains
     FILES ||--o{ FILE_VERSIONS : has
     FILE_VERSIONS }o--|| BLOBS : uses
-    FILE_VERSIONS ||--o{ VERSION_RELATIONS : from
-    FILE_VERSIONS ||--o{ VERSION_RELATIONS : to
+    FILE_VERSIONS ||--o{ VERSION_RELATIONS : "from"
+    FILE_VERSIONS ||--o{ VERSION_RELATIONS : "to"
     FILE_VERSIONS ||--o{ VERSION_PROPERTIES : has
     FILES ||--o| CHECKOUT_LOCKS : locked_by
     FILES ||--o{ WORKSPACE_ENTRIES : materialized_in
