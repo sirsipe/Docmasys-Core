@@ -95,7 +95,7 @@ void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files, DB:
     if (entry.BlobRef->Status != DB::BlobStatus::Ready)
       continue;
 
-    const auto relative = entry.RelativePath.lexically_relative("ROOT");
+    const auto relative = Common::WorkspacePathFromVaultPath(entry.RelativePath);
     const auto outPath = m_LocalRoot / relative;
     fs::create_directories(outPath.parent_path());
     RemoveExistingPath(outPath);
@@ -138,10 +138,7 @@ void Vault::Pop()
 
 void Vault::Pop(const MaterializationOptions &options)
 {
-  auto relative = options.RelativeFilePath.lexically_normal();
-  if (relative.empty())
-    throw std::runtime_error("relative file path is required");
-  relative = Common::EnsureRootedVaultPath(relative);
+  const auto relative = Common::RequireRootedVaultPath(options.RelativeFilePath);
 
   const auto file = m_Database->GetFileByRelativePath(relative);
   const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
@@ -155,10 +152,7 @@ void Vault::Checkout(const CheckoutOptions &options)
   if (options.Environment.empty())
     throw std::runtime_error("checkout requires environment");
 
-  auto relative = options.RelativeFilePath.lexically_normal();
-  if (relative.empty())
-    throw std::runtime_error("relative file path is required");
-  relative = Common::EnsureRootedVaultPath(relative);
+  const auto relative = Common::RequireRootedVaultPath(options.RelativeFilePath);
 
   const auto file = m_Database->GetFileByRelativePath(relative);
   const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
@@ -184,7 +178,7 @@ void Vault::Repair()
         .LogicalFile = status.Entry.LogicalFile,
         .Version = status.Entry.Version,
         .BlobRef = m_Database->GetBlob(status.Entry.Version->BlobId),
-        .RelativePath = fs::path("ROOT") / status.Entry.RelativePath}},
+        .RelativePath = Common::EnsureRootedVaultPath(status.Entry.RelativePath)}},
         status.Entry.Kind);
   }
 }
@@ -196,11 +190,9 @@ void Vault::Checkin(const CheckinOptions &options)
   if (options.Environment.empty())
     throw std::runtime_error("checkin requires environment");
 
-  auto relative = options.RelativeFilePath.lexically_normal();
-  if (relative.empty())
-    throw std::runtime_error("relative file path is required");
+  const auto relative = Common::RequireRootedVaultPath(options.RelativeFilePath);
 
-  const auto file = m_Database->GetFileByRelativePath(Common::EnsureRootedVaultPath(relative));
+  const auto file = m_Database->GetFileByRelativePath(relative);
   const auto entry = m_Database->GetWorkspaceEntry(m_LocalRoot, file);
   if (!entry)
     throw std::runtime_error("file is not materialized in this workspace");
@@ -226,7 +218,7 @@ void Vault::Checkin(const CheckinOptions &options)
     }
   }
 
-  const auto fullPath = m_LocalRoot / relative;
+  const auto fullPath = m_LocalRoot / Common::WorkspacePathFromVaultPath(relative);
   const auto identity = CAS::Identify(fullPath);
   const auto import = m_Database->Import(fullPath, identity);
   const auto blob = m_Database->GetBlob(import.Version->BlobId);
@@ -237,17 +229,15 @@ void Vault::Checkin(const CheckinOptions &options)
   }
 
   auto currentVersion = m_Database->GetFileVersion(file, std::nullopt);
-  m_Database->UpsertWorkspaceEntry(m_LocalRoot, file, currentVersion, relative, DB::MaterializationKind::CheckoutCopy);
+  m_Database->UpsertWorkspaceEntry(m_LocalRoot, file, currentVersion, Common::WorkspacePathFromVaultPath(relative), DB::MaterializationKind::CheckoutCopy);
   if (options.ReleaseLock)
     m_Database->ReleaseCheckoutLock(file, options.User, options.Environment, m_LocalRoot);
 }
 
 void Vault::Unlock(const fs::path &relativeFilePath)
 {
-  auto relative = relativeFilePath.lexically_normal();
-  if (relative.empty())
-    throw std::runtime_error("relative file path is required");
-  const auto file = m_Database->GetFileByRelativePath(Common::EnsureRootedVaultPath(relative));
+  const auto relative = Common::RequireRootedVaultPath(relativeFilePath);
+  const auto file = m_Database->GetFileByRelativePath(relative);
   if (!m_Database->ForceReleaseCheckoutLock(file))
     throw std::runtime_error("file was not locked");
 }

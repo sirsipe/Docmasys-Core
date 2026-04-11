@@ -1,6 +1,7 @@
 #include "PathUtils.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace fs = std::filesystem;
 
@@ -12,6 +13,19 @@ namespace Docmasys::Common
     if (!normalized.empty() && normalized.begin()->string() == "ROOT")
       return normalized;
     return fs::path("ROOT") / normalized;
+  }
+
+  fs::path RequireRootedVaultPath(const fs::path &path, const char *errorMessage)
+  {
+    const auto normalized = path.lexically_normal();
+    if (normalized.empty())
+      throw std::runtime_error(errorMessage);
+    return EnsureRootedVaultPath(normalized);
+  }
+
+  fs::path WorkspacePathFromVaultPath(const fs::path &rootedVaultPath)
+  {
+    return RequireRootedVaultPath(rootedVaultPath).lexically_relative("ROOT");
   }
 
   std::string CanonicalWorkspaceRoot(const fs::path &path)

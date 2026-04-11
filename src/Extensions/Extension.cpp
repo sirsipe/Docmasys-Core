@@ -1,4 +1,5 @@
 #include "Extension.hpp"
+#include "../Common/PathUtils.hpp"
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -69,7 +70,7 @@ public:
 
 void ImportedVersionContext::AddRelationTo(const fs::path &targetPath, std::int64_t versionNumber, DB::RelationType type) const
 {
-  auto file = Database.GetFileByRelativePath(targetPath.is_absolute() ? targetPath : fs::path("ROOT") / targetPath);
+  auto file = Database.GetFileByRelativePath(Common::RequireRootedVaultPath(targetPath, "relation target path is required"));
   Database.AddRelation(Version, Database.GetFileVersion(file, versionNumber), type);
 }
 
