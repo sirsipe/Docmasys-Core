@@ -25,14 +25,23 @@ target_include_directories(DocmasysCAS PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(DocmasysCAS PUBLIC OpenSSL::Crypto ${DOCMASYS_ZSTD_TARGET})
 
 add_library(DocmasysCore
+  src/Common/PathUtils.cpp
   src/DB/Database.cpp
+  src/DB/DatabaseProperties.cpp
+  src/DB/DatabaseRecords.cpp
+  src/DB/DatabaseRelations.cpp
+  src/DB/DatabaseWorkspace.cpp
   src/Extensions/Extension.cpp
   src/Vault.cpp
 )
 target_include_directories(DocmasysCore PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(DocmasysCore PUBLIC DocmasysCAS ${DOCMASYS_SQLITE_TARGET})
 
-add_executable(Docmasys src/main.cpp)
+add_executable(Docmasys
+  src/cli/CommandHelpers.cpp
+  src/cli/Commands.cpp
+  src/main.cpp
+)
 target_link_libraries(Docmasys PRIVATE DocmasysCore)
 
 enable_testing()

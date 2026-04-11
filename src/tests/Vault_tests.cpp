@@ -3,38 +3,21 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <chrono>
 
 #include "../CAS/CAS.hpp"
 #include "../DB/Database.hpp"
 #include "../Vault.hpp"
+#include "TestSupport.hpp"
 
 namespace fs = std::filesystem;
 using namespace Docmasys;
+using Docmasys::Tests::TempDir;
 
 namespace
 {
-  struct TempDir
-  {
-    fs::path dir;
-    TempDir()
-    {
-      const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-      dir = fs::temp_directory_path() / fs::path("docmasys_vault_test_" + unique);
-      fs::create_directories(dir);
-    }
-    ~TempDir()
-    {
-      std::error_code ec;
-      fs::remove_all(dir, ec);
-    }
-  };
-
   fs::path MakeFile(const fs::path &p, std::string_view content)
   {
-    fs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out << content;
+    Tests::WriteFile(p, content);
     return p;
   }
 

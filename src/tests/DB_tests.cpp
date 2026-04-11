@@ -1,52 +1,19 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
-#include <fstream>
 #include <sqlite3.h>
-#include <chrono>
 
 #include "../DB/Database.hpp"
+#include "TestSupport.hpp"
 
 namespace fs = std::filesystem;
 using namespace Docmasys;
 using namespace Docmasys::DB;
+using Docmasys::Tests::MakeIdentity;
+using Docmasys::Tests::TempDir;
 
 namespace
 {
-struct TempDir
-{
-  fs::path dir;
-  TempDir()
-  {
-    auto base = fs::temp_directory_path();
-    for (int i = 0; i < 1000; ++i)
-    {
-      const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-      auto cand = base / ("db_test_" + unique + "_" + std::to_string(i));
-      if (fs::create_directory(cand))
-      {
-        dir = cand;
-        break;
-      }
-    }
-    if (dir.empty())
-      throw std::runtime_error("TempDir: failed to create");
-  }
-  ~TempDir()
-  {
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-  }
-};
-
-Identity MakeIdentity(std::uint8_t seed)
-{
-  Identity id{};
-  for (size_t i = 0; i < id.size(); ++i)
-    id[i] = static_cast<std::uint8_t>(seed + i);
-  return id;
-}
-
 int ReadUserVersion(const fs::path &dbPath)
 {
   sqlite3 *db = nullptr;

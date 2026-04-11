@@ -1,64 +1,54 @@
 #include <gtest/gtest.h>
+
+#include "TestSupport.hpp"
+
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <cstdlib>
 #include <sstream>
-#include <chrono>
+#include <string>
 
 namespace fs = std::filesystem;
+using Docmasys::Tests::TempDir;
 
-struct TempDir
+namespace
 {
-  fs::path dir;
-  TempDir()
+  int RunCommand(const std::string &cmd)
   {
-    const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    dir = fs::temp_directory_path() / fs::path("docmasys_cli_test_" + unique);
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    return std::system(cmd.c_str());
   }
-  ~TempDir()
+
+  std::string ShellQuote(const fs::path &path)
   {
-    std::error_code ec;
-    fs::remove_all(dir, ec);
+    return '"' + path.string() + '"';
   }
-};
 
-static int RunCommand(const std::string &cmd)
-{
-  return std::system(cmd.c_str());
-}
-
-static std::string ShellQuote(const fs::path &path)
-{
-  return '"' + path.string() + '"';
-}
-
-static std::string NullRedirect()
-{
+  std::string NullRedirect()
+  {
 #ifdef _WIN32
-  return " > NUL";
+    return " > NUL";
 #else
-  return " > /dev/null";
+    return " > /dev/null";
 #endif
-}
+  }
 
-static std::string NullRedirectBoth()
-{
+  std::string NullRedirectBoth()
+  {
 #ifdef _WIN32
-  return " > NUL 2>&1";
+    return " > NUL 2>&1";
 #else
-  return " > /dev/null 2>&1";
+    return " > /dev/null 2>&1";
 #endif
-}
+  }
 
-static std::string RunAndCapture(const fs::path &outputFile, const std::string &cmd)
-{
-  EXPECT_EQ(RunCommand(cmd + " > " + ShellQuote(outputFile)), 0);
-  std::ifstream input(outputFile);
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
+  std::string RunAndCapture(const fs::path &outputFile, const std::string &cmd)
+  {
+    EXPECT_EQ(RunCommand(cmd + " > " + ShellQuote(outputFile)), 0);
+    std::ifstream input(outputFile);
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+  }
 }
 
 TEST(CLI, HelpAndVerbFlow)
@@ -77,9 +67,7 @@ TEST(CLI, HelpAndVerbFlow)
   fs::create_directories(root);
   fs::create_directories(archive);
 
-  {
-    std::ofstream(root / "alpha.txt") << "v1";
-  }
+  Docmasys::Tests::WriteFile(root / "alpha.txt", "v1");
 
   EXPECT_EQ(RunCommand(std::string(bin) + " help" + NullRedirect()), 0);
   EXPECT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + root.string()), 0);
@@ -108,12 +96,10 @@ TEST(CLI, BatchOperations)
   fs::create_directories(root / "refs");
   fs::create_directories(archive);
 
-  {
-    std::ofstream(root / "docs" / "alpha.txt") << "alpha";
-    std::ofstream(root / "refs" / "beta.txt") << "beta";
-    std::ofstream(pathsFile) << "docs/alpha.txt\nrefs/beta.txt\n";
-    std::ofstream(refsFile) << "docs/alpha.txt@1\nrefs/beta.txt@1\n";
-  }
+  Docmasys::Tests::WriteFile(root / "docs" / "alpha.txt", "alpha");
+  Docmasys::Tests::WriteFile(root / "refs" / "beta.txt", "beta");
+  Docmasys::Tests::WriteFile(pathsFile, "docs/alpha.txt\nrefs/beta.txt\n");
+  Docmasys::Tests::WriteFile(refsFile, "docs/alpha.txt@1\nrefs/beta.txt@1\n");
 
   ASSERT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + root.string()), 0);
 
@@ -133,9 +119,7 @@ TEST(CLI, BatchOperations)
   EXPECT_NE(propsOutput.find("ROOT/docs/alpha.txt@1\treviewed\tbool\ttrue"), std::string::npos);
   EXPECT_NE(propsOutput.find("ROOT/refs/beta.txt@1\treviewed\tbool\ttrue"), std::string::npos);
 
-  {
-    std::ofstream(edgesFile) << "docs/alpha.txt@1 refs/beta.txt@1 strong\n";
-  }
+  Docmasys::Tests::WriteFile(edgesFile, "docs/alpha.txt@1 refs/beta.txt@1 strong\n");
   ASSERT_EQ(RunCommand(std::string(bin) + " relate --archive " + archive.string() +
                        " --edges-file " + edgesFile.string()), 0);
 
@@ -156,7 +140,7 @@ TEST(CLI, BatchOperations)
   EXPECT_NE(locksOutput.find("ROOT/docs/alpha.txt\tsimo\tws1"), std::string::npos);
   EXPECT_NE(locksOutput.find("ROOT/refs/beta.txt\tsimo\tws1"), std::string::npos);
 
-  std::ofstream(out / "docs" / "alpha.txt") << "alpha-v2";
+  Docmasys::Tests::WriteFile(out / "docs" / "alpha.txt", "alpha-v2");
 
   ASSERT_EQ(RunCommand(std::string(bin) + " checkin --archive " + archive.string() +
                        " --root " + out.string() +
@@ -189,12 +173,12 @@ TEST(CLI, ImportRejectsTamperedReadonlyAndUnlockClearsLock)
   fs::create_directories(editWs);
   fs::create_directories(otherWs);
 
-  std::ofstream(root / "alpha.txt") << "v1";
+  Docmasys::Tests::WriteFile(root / "alpha.txt", "v1");
   ASSERT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + root.string()), 0);
   ASSERT_EQ(RunCommand(std::string(bin) + " get --archive " + archive.string() + " --ref alpha.txt --out " + readonlyWs.string() + " --mode readonly-copy"), 0);
 
   fs::permissions(readonlyWs / "alpha.txt", fs::perms::owner_write, fs::perm_options::add);
-  std::ofstream(readonlyWs / "alpha.txt") << "bad";
+  Docmasys::Tests::WriteFile(readonlyWs / "alpha.txt", "bad");
   EXPECT_NE(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + readonlyWs.string() + NullRedirectBoth()), 0);
 
   ASSERT_EQ(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + editWs.string() + " --user simo --environment ws1"), 0);

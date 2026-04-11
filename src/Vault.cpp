@@ -1,5 +1,6 @@
 #include "Vault.hpp"
 #include "CAS/CAS.hpp"
+#include "Common/PathUtils.hpp"
 
 #include <fstream>
 #include <system_error>
@@ -140,8 +141,7 @@ void Vault::Pop(const MaterializationOptions &options)
   auto relative = options.RelativeFilePath.lexically_normal();
   if (relative.empty())
     throw std::runtime_error("relative file path is required");
-  if (*relative.begin() != fs::path("ROOT"))
-    relative = fs::path("ROOT") / relative;
+  relative = Common::EnsureRootedVaultPath(relative);
 
   const auto file = m_Database->GetFileByRelativePath(relative);
   const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
@@ -158,8 +158,7 @@ void Vault::Checkout(const CheckoutOptions &options)
   auto relative = options.RelativeFilePath.lexically_normal();
   if (relative.empty())
     throw std::runtime_error("relative file path is required");
-  if (*relative.begin() != fs::path("ROOT"))
-    relative = fs::path("ROOT") / relative;
+  relative = Common::EnsureRootedVaultPath(relative);
 
   const auto file = m_Database->GetFileByRelativePath(relative);
   const auto version = m_Database->GetFileVersion(file, options.VersionNumber);
@@ -201,7 +200,7 @@ void Vault::Checkin(const CheckinOptions &options)
   if (relative.empty())
     throw std::runtime_error("relative file path is required");
 
-  const auto file = m_Database->GetFileByRelativePath(fs::path("ROOT") / relative);
+  const auto file = m_Database->GetFileByRelativePath(Common::EnsureRootedVaultPath(relative));
   const auto entry = m_Database->GetWorkspaceEntry(m_LocalRoot, file);
   if (!entry)
     throw std::runtime_error("file is not materialized in this workspace");
@@ -248,7 +247,7 @@ void Vault::Unlock(const fs::path &relativeFilePath)
   auto relative = relativeFilePath.lexically_normal();
   if (relative.empty())
     throw std::runtime_error("relative file path is required");
-  const auto file = m_Database->GetFileByRelativePath(fs::path("ROOT") / relative);
+  const auto file = m_Database->GetFileByRelativePath(Common::EnsureRootedVaultPath(relative));
   if (!m_Database->ForceReleaseCheckoutLock(file))
     throw std::runtime_error("file was not locked");
 }
