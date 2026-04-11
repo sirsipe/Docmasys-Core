@@ -29,6 +29,7 @@ namespace Docmasys::CLI
   using Options = std::unordered_map<std::string, std::vector<std::string>>;
 
   std::string ToString(DB::RelationType type);
+  std::string ToString(DB::BlobStatus status);
   std::string ToString(DB::MaterializationKind kind);
   std::string ToString(DB::WorkspaceEntryState state);
   std::string ToString(PropertyValueType type);

@@ -16,7 +16,9 @@ namespace Docmasys::CLI
   {
     int RunImport(const Options &options)
     {
-      Vault(Require(options, "root"), Require(options, "archive")).Push();
+      Vault(Require(options, "root"), Require(options, "archive")).Push(ImportOptions{
+          .IncludePatterns = CollectBatchValues(options, "include", "includes-file"),
+          .IgnorePatterns = CollectBatchValues(options, "ignore", "ignores-file")});
       return 0;
     }
 
@@ -261,8 +263,17 @@ namespace Docmasys::CLI
     {
       const auto archive = fs::path(Require(options, "archive"));
       auto db = DB::Database::Open(archive / "content.db", OptionalValue(options, "root").value_or("."));
+      std::cout << "path\tversion\tblob\tproperties\toutgoing_relations\n";
       for (const auto &item : db->InspectCurrentFiles())
-        std::cout << item.RelativePath.generic_string() << " @" << item.Version->VersionNumber << "\n";
+      {
+        const auto propertyCount = db->ListVersionProperties(item.Version).size();
+        const auto relationCount = db->GetOutgoingRelations(item.Version, std::nullopt).size();
+        std::cout << item.RelativePath.generic_string() << '\t'
+                  << item.Version->VersionNumber << '\t'
+                  << ToString(item.BlobRef->Status) << '\t'
+                  << propertyCount << '\t'
+                  << relationCount << "\n";
+      }
       return 0;
     }
   }

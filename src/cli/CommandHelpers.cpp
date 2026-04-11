@@ -22,6 +22,18 @@ namespace Docmasys::CLI
     throw std::runtime_error("unknown relation type");
   }
 
+  std::string ToString(DB::BlobStatus status)
+  {
+    switch (status)
+    {
+    case DB::BlobStatus::Pending:
+      return "pending";
+    case DB::BlobStatus::Ready:
+      return "ready";
+    }
+    throw std::runtime_error("unknown blob status");
+  }
+
   std::string ToString(DB::MaterializationKind kind)
   {
     switch (kind)
@@ -242,7 +254,7 @@ namespace Docmasys::CLI
     std::cout << "Archive / workspace engine with immutable versions, relations, properties, and explicit checkout flow.\n\n";
     std::cout << "Usage:\n";
     std::cout << "  " << programName << " help\n";
-    std::cout << "  " << programName << " import --archive <archive> --root <folder>\n";
+    std::cout << "  " << programName << " import --archive <archive> --root <folder> [--include <glob> | --includes-file <file>]... [--ignore <glob> | --ignores-file <file>]...\n";
     std::cout << "  " << programName << " get --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all] [--mode readonly-copy|readonly-symlink]\n";
     std::cout << "  " << programName << " checkout --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --out <folder> --user <user> --environment <environment> [--scope none|strong|strong+weak|all]\n";
     std::cout << "  " << programName << " checkin --archive <archive> (--ref <path> | --refs-file <file>)... --root <folder> --user <user> --environment <environment> [--keep-lock true|false]\n";
@@ -261,7 +273,8 @@ namespace Docmasys::CLI
 
     std::cout << "Common flows:\n";
     std::cout << "  Import folder into archive\n";
-    std::cout << "    " << programName << " import --archive ./archive --root ./source\n\n";
+    std::cout << "    " << programName << " import --archive ./archive --root ./source\n";
+    std::cout << "    " << programName << " import --archive ./archive --root ./source --include 'docs/**' --ignore '**/*.tmp'\n\n";
     std::cout << "  Materialize readonly view\n";
     std::cout << "    " << programName << " get --archive ./archive --ref docs/readme.txt --out ./ws --mode readonly-copy\n\n";
     std::cout << "  Checkout, edit, and check in\n";
@@ -272,5 +285,6 @@ namespace Docmasys::CLI
     std::cout << "  - Omitting @version means latest version.\n";
     std::cout << "  - checkin/unlock accept logical paths only, not @version selectors.\n";
     std::cout << "  - status states: ok, missing, modified, replaced.\n";
+    std::cout << "  - import include/ignore globs are matched against workspace-relative paths.\n";
   }
 }

@@ -3,6 +3,7 @@
 #include "Common/PathUtils.hpp"
 
 #include <fstream>
+#include <regex>
 #include <system_error>
 
 using namespace Docmasys;
@@ -38,6 +39,75 @@ void SetWritable(const fs::path &path)
                     fs::perm_options::replace,
                     ec);
 }
+
+std::string GlobToRegex(const std::string &pattern)
+{
+  std::string regex = "^";
+  for (std::size_t i = 0; i < pattern.size(); ++i)
+  {
+    const char c = pattern[i];
+    if (c == '*')
+    {
+      if (i + 1 < pattern.size() && pattern[i + 1] == '*')
+      {
+        regex += ".*";
+        ++i;
+      }
+      else
+      {
+        regex += "[^/]*";
+      }
+      continue;
+    }
+
+    if (c == '?')
+    {
+      regex += "[^/]";
+      continue;
+    }
+
+    if (c == '/' || c == '\\')
+    {
+      regex += "/";
+      continue;
+    }
+
+    if (std::string(".^$|()[]{}+").find(c) != std::string::npos)
+      regex += '\\';
+    regex += c;
+  }
+  regex += "$";
+  return regex;
+}
+
+bool MatchesAnyPattern(const fs::path &relativePath, const std::vector<std::string> &patterns)
+{
+  if (patterns.empty())
+    return false;
+
+  const auto candidate = relativePath.generic_string();
+  for (const auto &pattern : patterns)
+  {
+    if (std::regex_match(candidate, std::regex(GlobToRegex(pattern), std::regex::ECMAScript | std::regex::icase)))
+      return true;
+  }
+  return false;
+}
+
+bool ShouldImportPath(const fs::path &root, const fs::path &path, const ImportOptions &options)
+{
+  fs::path relative;
+  if (!Common::TryMakeVaultRelativePath(root, path, relative))
+    return false;
+
+  const auto workspaceRelative = Common::WorkspacePathFromVaultPath(relative);
+  const bool included = options.IncludePatterns.empty() || MatchesAnyPattern(workspaceRelative, options.IncludePatterns);
+  if (!included)
+    return false;
+  if (MatchesAnyPattern(workspaceRelative, options.IgnorePatterns))
+    return false;
+  return true;
+}
 }
 
 Vault::Vault(const fs::path &root, const fs::path &archive)
@@ -49,6 +119,11 @@ Vault::Vault(const fs::path &root, const fs::path &archive)
 }
 
 void Vault::Push()
+{
+  Push(ImportOptions{});
+}
+
+void Vault::Push(const ImportOptions &options)
 {
   const auto statuses = Status();
   for (const auto &status : statuses)
@@ -65,6 +140,8 @@ void Vault::Push()
   for (const auto &entry : fs::recursive_directory_iterator(m_LocalRoot))
   {
     if (entry.is_directory())
+      continue;
+    if (!ShouldImportPath(m_LocalRoot, entry.path(), options))
       continue;
 
     const auto identity = CAS::Identify(entry.path());

@@ -32,11 +32,18 @@ namespace Docmasys
     bool ReleaseLock{true};
   };
 
+  struct ImportOptions
+  {
+    std::vector<std::string> IncludePatterns;
+    std::vector<std::string> IgnorePatterns;
+  };
+
   class Vault
   {
   public:
     Vault(const std::filesystem::path &root, const std::filesystem::path &archive);
     void Push();
+    void Push(const ImportOptions &options);
     void Pop();
     void Pop(const MaterializationOptions &options);
     void Checkout(const CheckoutOptions &options);
