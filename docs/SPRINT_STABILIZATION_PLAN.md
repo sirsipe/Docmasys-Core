@@ -6,7 +6,7 @@ Relevant issues:
 - #11 DB layer split + SQLite statement helpers
 - #12 reduce `shared_ptr` overuse
 - #14 shared filesystem/materialization path handling
-- new issue: trim premature DB migration logic while keeping a minimal future migration framework
+- #16 trim premature DB migration logic while keeping a minimal future migration framework
 
 ## Current repo state
 
