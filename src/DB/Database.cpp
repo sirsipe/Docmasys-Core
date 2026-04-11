@@ -15,10 +15,7 @@ Database::Database(const fs::path &databaseFile, const fs::path &localVaultRoot)
 
   m_Database = std::make_unique<Impl>(db);
   ExecSQL("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys = ON;");
-  MigrateLegacySchemaIfNeeded();
-  MigrateSchemaIfNeeded();
-  ExecSQL(DB_SCHEMA);
-  ExecSQL("PRAGMA user_version = 3;");
+  EnsureSchema();
 }
 
 Database::~Database() = default;
@@ -38,6 +35,14 @@ void Database::OpenTransaction() { ExecSQL("BEGIN IMMEDIATE;"); }
 void Database::Commit() { ExecSQL("COMMIT;"); }
 void Database::Rollback() { sqlite3_exec(m_Database->m_db, "ROLLBACK;", nullptr, nullptr, nullptr); }
 
+void Database::EnsureSchema()
+{
+  MigrateLegacySchemaIfNeeded();
+  MigrateSchemaIfNeeded();
+  ExecSQL(DB_SCHEMA);
+  Detail::SetUserVersion(m_Database->m_db, DB_SCHEMA_VERSION);
+}
+
 void Database::MigrateLegacySchemaIfNeeded()
 {
   if (!Detail::HasColumn(m_Database->m_db, "files", "blob_id") || Detail::HasColumn(m_Database->m_db, "files", "current_version_id"))
@@ -52,7 +57,7 @@ void Database::MigrateLegacySchemaIfNeeded()
     ExecSQL("INSERT INTO file_versions(file_id,version_number,blob_id) SELECT id,1,blob_id FROM files_legacy;");
     ExecSQL("UPDATE files SET current_version_id=(SELECT fv.id FROM file_versions fv WHERE fv.file_id=files.id AND fv.version_number=1);");
     ExecSQL("DROP TABLE files_legacy;");
-    ExecSQL("PRAGMA user_version = 1;");
+    Detail::SetUserVersion(m_Database->m_db, 1);
     Commit();
   }
   catch (...)
@@ -114,7 +119,7 @@ void Database::MigrateSchemaIfNeeded()
       )SQL");
     }
 
-    ExecSQL("PRAGMA user_version = 3;");
+    Detail::SetUserVersion(m_Database->m_db, DB_SCHEMA_VERSION);
     Commit();
   }
   catch (...)

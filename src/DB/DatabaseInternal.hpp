@@ -73,6 +73,18 @@ namespace Docmasys::DB
       return sqlite3_column_int(statement.get(), 0);
     }
 
+    inline void SetUserVersion(sqlite3 *db, int version)
+    {
+      char *error = nullptr;
+      const auto sql = std::string("PRAGMA user_version = ") + std::to_string(version) + ";";
+      if (sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error) != SQLITE_OK)
+      {
+        const std::string message = error ? error : "failed to set schema version";
+        sqlite3_free(error);
+        throw std::runtime_error(message);
+      }
+    }
+
     inline std::string NormalizePropertyName(const std::string &name)
     {
       if (name.empty())

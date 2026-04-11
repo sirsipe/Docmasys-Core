@@ -37,6 +37,26 @@ TEST(DB, FreshDatabaseSetsSchemaVersion)
   EXPECT_EQ(ReadUserVersion(dbPath), DB_SCHEMA_VERSION);
 }
 
+TEST(DB, ReopeningCurrentSchemaKeepsDatabaseReadable)
+{
+  TempDir td;
+  const auto dbPath = td.dir / "content.db";
+  const auto vaultRoot = td.dir / "vault";
+  fs::create_directories(vaultRoot);
+  std::ofstream(vaultRoot / "a.txt") << "a";
+
+  {
+    auto db = Database::Open(dbPath, vaultRoot);
+    auto imported = db->Import(vaultRoot / "a.txt", MakeIdentity(7));
+    EXPECT_EQ(imported.Version->VersionNumber, 1);
+  }
+
+  auto reopened = Database::Open(dbPath, vaultRoot);
+  EXPECT_EQ(ReadUserVersion(dbPath), DB_SCHEMA_VERSION);
+  auto file = reopened->GetFileByRelativePath("ROOT/a.txt");
+  EXPECT_EQ(reopened->GetFileVersion(file, std::nullopt)->VersionNumber, 1);
+}
+
 TEST(DB, ImportCreatesVersionHistoryAndPreservesBlobs)
 {
   TempDir td;
