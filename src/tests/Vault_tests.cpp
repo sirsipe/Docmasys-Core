@@ -271,6 +271,56 @@ TEST(Vault, PushRejectsTamperedReadonlyFilesAndUnlockCanClearStaleLock)
   EXPECT_NO_THROW(otherVault.Checkout(CheckoutOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .User = "other", .Environment = "ws2"}));
 }
 
+TEST(Vault, ReadonlyCopiesBecomeNonOkWhenWriteBitsReturn)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  auto readonlyRoot = td.dir / "readonly";
+  fs::create_directories(source);
+  fs::create_directories(archive);
+  fs::create_directories(readonlyRoot);
+
+  Vault sourceVault(source, archive);
+  MakeFile(source / "doc.txt", "v1");
+  sourceVault.Push();
+
+  Vault readonlyVault(readonlyRoot, archive);
+  readonlyVault.Pop(MaterializationOptions{.RelativeFilePath = fs::path("doc.txt"), .VersionNumber = std::nullopt, .RelationScope = DB::RelationScope::None, .Kind = DB::MaterializationKind::ReadOnlyCopy});
+  fs::permissions(readonlyRoot / "doc.txt", fs::perms::owner_write, fs::perm_options::add);
+
+  const auto statuses = readonlyVault.Status();
+  ASSERT_EQ(statuses.size(), 1u);
+  EXPECT_EQ(statuses.front().State, DB::WorkspaceEntryState::Modified);
+
+  readonlyVault.Repair();
+  const auto repairedPerms = fs::status(readonlyRoot / "doc.txt").permissions();
+  EXPECT_EQ(repairedPerms & fs::perms::owner_write, fs::perms::none);
+}
+
+TEST(Vault, PushCanFilterImportedFilesByIncludeAndIgnorePatterns)
+{
+  TempDir td;
+  auto source = td.dir / "source";
+  auto archive = td.dir / "archive";
+  fs::create_directories(source / "docs");
+  fs::create_directories(source / "tmp");
+  fs::create_directories(archive);
+
+  MakeFile(source / "docs" / "keep.txt", "keep");
+  MakeFile(source / "docs" / "skip.tmp", "skip");
+  MakeFile(source / "tmp" / "drop.txt", "drop");
+
+  Vault(source, archive).Push(ImportOptions{
+      .IncludePatterns = {"docs/**"},
+      .IgnorePatterns = {"**/*.tmp"}});
+
+  auto db = DB::Database::Open(archive / "content.db", source);
+  EXPECT_NO_THROW(db->GetFileByRelativePath("ROOT/docs/keep.txt"));
+  EXPECT_THROW(db->GetFileByRelativePath("ROOT/docs/skip.tmp"), std::runtime_error);
+  EXPECT_THROW(db->GetFileByRelativePath("ROOT/tmp/drop.txt"), std::runtime_error);
+}
+
 TEST(Vault, ImportExtensionsCanAttachPropertiesAndRelations)
 {
   TempDir td;

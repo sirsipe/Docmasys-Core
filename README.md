@@ -47,7 +47,7 @@ cmake --build build
 ## CLI overview
 
 ```text
-Docmasys import    --archive <archive> --root <folder>
+Docmasys import    --archive <archive> --root <folder> [--include <glob> | --includes-file <file>]... [--ignore <glob> | --ignores-file <file>]...
 Docmasys get       --archive <archive> (--ref <path[@version]> | --refs-file <file>)... [--out <folder>] [--scope none|strong|strong+weak|all] [--mode readonly-copy|readonly-symlink]
 Docmasys checkout  --archive <archive> (--ref <path[@version]> | --refs-file <file>)... --out <folder> --user <user> --environment <environment> [--scope none|strong|strong+weak|all]
 Docmasys checkin   --archive <archive> (--ref <path> | --refs-file <file>)... --root <folder> --user <user> --environment <environment> [--keep-lock true|false]
@@ -184,9 +184,11 @@ flowchart TD
 
 ### `import`
 - imports a folder tree into an archive
+- can filter imported paths with include/ignore glob rules matched against root-relative paths
 - creates new versions only when content changed
 - stores new blobs in CAS
 - rejects tampered readonly tracked files inside managed workspaces
+- rejects readonly copies that have become writable again, even if file contents still match
 
 ### `get`
 - materializes one or more refs into a workspace
@@ -265,6 +267,13 @@ Docmasys import --archive ./demo-archive --root ./demo-src
 
 ```bash
 Docmasys inspect --archive ./demo-archive
+```
+
+`inspect` now prints tab-separated columns:
+
+```text
+path    version blob    properties      outgoing_relations
+ROOT/docs/readme.txt    1       ready   0       0
 ```
 
 ### List versions
@@ -428,9 +437,9 @@ Additional lightweight project/process docs live under `docs/`:
 
 ## Current limitations
 
-- `inspect` is intentionally lightweight
+- `inspect` is lightweight but now reports version, blob readiness, property count, and outgoing relation count
 - `relations` currently reports outgoing relations only
 - batch commands fail fast on first invalid item
 - readonly symlink behavior still needs validation on Windows environments
 - `unlock` has no admin/permission layer
-- ignore rules are not implemented yet
+- include/ignore matching currently supports simple glob patterns (`*`, `?`, `**`) against workspace-relative paths

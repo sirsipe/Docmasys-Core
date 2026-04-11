@@ -61,6 +61,7 @@ TEST(CLI, HelpAndVerbFlow)
   const auto helpText = RunAndCapture(helpOut, std::string(bin) + " help");
   EXPECT_NE(helpText.find("Common flows:"), std::string::npos);
   EXPECT_NE(helpText.find("status states: ok, missing, modified, replaced"), std::string::npos);
+  EXPECT_NE(helpText.find("--include <glob>"), std::string::npos);
   auto root = td.dir / "root";
   auto archive = td.dir / "archive";
   auto out = td.dir / "out";
@@ -178,11 +179,44 @@ TEST(CLI, ImportRejectsTamperedReadonlyAndUnlockClearsLock)
   ASSERT_EQ(RunCommand(std::string(bin) + " get --archive " + archive.string() + " --ref alpha.txt --out " + readonlyWs.string() + " --mode readonly-copy"), 0);
 
   fs::permissions(readonlyWs / "alpha.txt", fs::perms::owner_write, fs::perm_options::add);
-  Docmasys::Tests::WriteFile(readonlyWs / "alpha.txt", "bad");
   EXPECT_NE(RunCommand(std::string(bin) + " import --archive " + archive.string() + " --root " + readonlyWs.string() + NullRedirectBoth()), 0);
 
   ASSERT_EQ(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + editWs.string() + " --user simo --environment ws1"), 0);
   EXPECT_NE(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + otherWs.string() + " --user other --environment ws2" + NullRedirectBoth()), 0);
   ASSERT_EQ(RunCommand(std::string(bin) + " unlock --archive " + archive.string() + " --ref alpha.txt"), 0);
   ASSERT_EQ(RunCommand(std::string(bin) + " checkout --archive " + archive.string() + " --ref alpha.txt --out " + otherWs.string() + " --user other --environment ws2"), 0);
+}
+
+TEST(CLI, ImportSupportsIncludeIgnoreAndInspectReportsMoreMetadata)
+{
+  const char *bin = std::getenv("DOCMASYS_BIN");
+  ASSERT_NE(bin, nullptr);
+
+  TempDir td;
+  auto root = td.dir / "root";
+  auto archive = td.dir / "archive";
+  auto capture = td.dir / "capture.txt";
+  auto includesFile = td.dir / "includes.txt";
+  auto ignoresFile = td.dir / "ignores.txt";
+  fs::create_directories(root / "docs");
+  fs::create_directories(root / "tmp");
+  fs::create_directories(archive);
+
+  Docmasys::Tests::WriteFile(root / "docs" / "alpha.txt", "alpha");
+  Docmasys::Tests::WriteFile(root / "docs" / "skip.tmp", "skip");
+  Docmasys::Tests::WriteFile(root / "tmp" / "beta.txt", "beta");
+  Docmasys::Tests::WriteFile(includesFile, "docs/**\n");
+  Docmasys::Tests::WriteFile(ignoresFile, "**/*.tmp\n");
+
+  ASSERT_EQ(RunCommand(std::string(bin) + " import --archive " + archive.string() +
+                       " --root " + root.string() +
+                       " --includes-file " + includesFile.string() +
+                       " --ignores-file " + ignoresFile.string()), 0);
+
+  const auto inspectOutput = RunAndCapture(capture,
+      std::string(bin) + " inspect --archive " + archive.string());
+  EXPECT_NE(inspectOutput.find("path\tversion\tblob\tproperties\toutgoing_relations"), std::string::npos);
+  EXPECT_NE(inspectOutput.find("ROOT/docs/alpha.txt\t1\tready\t"), std::string::npos);
+  EXPECT_EQ(inspectOutput.find("ROOT/docs/skip.tmp"), std::string::npos);
+  EXPECT_EQ(inspectOutput.find("ROOT/tmp/beta.txt"), std::string::npos);
 }

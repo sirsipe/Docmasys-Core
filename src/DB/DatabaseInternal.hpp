@@ -178,6 +178,15 @@ namespace Docmasys::DB
       if (symlink)
         return WorkspaceEntryState::Replaced;
 
+      if (entry.Kind == MaterializationKind::ReadOnlyCopy)
+      {
+        const auto perms = std::filesystem::status(fullPath, ec).permissions();
+        if (!ec && ((perms & std::filesystem::perms::owner_write) != std::filesystem::perms::none ||
+                    (perms & std::filesystem::perms::group_write) != std::filesystem::perms::none ||
+                    (perms & std::filesystem::perms::others_write) != std::filesystem::perms::none))
+          return WorkspaceEntryState::Modified;
+      }
+
       const auto actualHash = CAS::Identify(fullPath);
       if (actualHash != expectedHash)
         return WorkspaceEntryState::Modified;
