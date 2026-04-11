@@ -52,6 +52,23 @@ Lightweight but non-negotiable:
 - fail loudly on ambiguity or inconsistent state
 - add regression tests for security-relevant bugs
 - document dangerous commands and operator footguns
+- be explicit about integrity/recovery limits; do not imply the archive is self-healing when it is not
+
+## Integrity and recovery posture
+
+For the current MVP, the main operational truth is simple:
+
+- workspace drift detection exists
+- readonly workspace repair exists
+- full archive-internal verification/repair does not exist yet
+
+That means backup quality is part of the security/integrity story.
+
+See `docs/ARCHIVE_INTEGRITY_AND_RECOVERY.md` for the concrete operator guidance:
+- minimum backup set
+- restore drill
+- expected failure signals
+- current limits of `status`, `inspect`, and `repair`
 
 ## What this project does not claim
 

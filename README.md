@@ -16,7 +16,17 @@ It is designed as a reusable core library plus a standalone CLI.
 
 ## Status
 
-This is still a prototype, but the main archive/workspace loop now exists:
+This is still a prototype. The main archive/workspace loop now exists, but archive recovery guarantees are still MVP-level and should be read literally:
+
+- tracked workspace drift detection exists
+- readonly workspace repair exists
+- immutable versions + CAS storage exist
+- a full built-in archive scrubber / `fsck` / internal repair tool does **not** exist yet
+- backups are therefore part of the product story, not an optional afterthought
+
+See `docs/ARCHIVE_INTEGRITY_AND_RECOVERY.md` for the current operational expectations.
+
+The main archive/workspace loop now exists:
 
 - import files into an archive
 - materialize readonly views
@@ -100,6 +110,52 @@ Files can be projected into a workspace as:
 
 ### Checkout lock
 A logical file can be marked as checked out by a user/environment/workspace tuple.
+
+## Archive integrity and recovery
+
+### What counts as a complete archive backup
+
+Back up the whole archive directory:
+
+- `content.db`
+- `Objects/`
+- `content.db-wal` if present
+- `content.db-shm` if present
+
+In practice, the safe rule is simple: copy or snapshot the entire archive directory, preferably while nothing is writing to it.
+
+### What Docmasys can verify today
+
+- `status` detects tracked workspace drift: `ok`, `missing`, `modified`, `replaced`
+- `repair` rematerializes damaged readonly tracked files
+- `inspect` reports current logical files and blob readiness from metadata
+- checkout/checkin flow refuses some obviously bad workspace states
+
+### What Docmasys cannot verify today
+
+- no built-in full archive `fsck`
+- no built-in command that proves every DB-referenced blob exists and decompresses cleanly
+- no built-in repair for corrupted `content.db` or missing CAS objects
+
+### Minimum restore drill
+
+Use a restored copy, not production:
+
+```bash
+cp -a /path/to/backup /tmp/docmasys-restore-test
+sqlite3 /tmp/docmasys-restore-test/content.db "PRAGMA integrity_check;"
+Docmasys inspect --archive /tmp/docmasys-restore-test
+Docmasys get --archive /tmp/docmasys-restore-test --ref docs/readme.txt --out /tmp/docmasys-restore-ws --mode readonly-copy
+Docmasys status --archive /tmp/docmasys-restore-test --root /tmp/docmasys-restore-ws
+```
+
+Expected outcome:
+- SQLite integrity check returns `ok`
+- `inspect` succeeds and lists expected files
+- `get` succeeds
+- restored workspace reports `ok`
+
+The full practical guidance lives in `docs/ARCHIVE_INTEGRITY_AND_RECOVERY.md`.
 
 ## Architecture
 
@@ -430,6 +486,7 @@ docs/ARCHITECTURE_DEVOPS_POLICY.md
 
 Additional lightweight project/process docs live under `docs/`:
 
+- `docs/ARCHIVE_INTEGRITY_AND_RECOVERY.md` - practical backup, restore, and archive integrity expectations for the MVP
 - `docs/BACKLOG.md` - work tracking template and current priorities
 - `docs/SECURITY.md` - security goals, threat model, and vulnerability reporting path
 - `docs/DEPENDENCIES_AND_SBOM.md` - dependency expectations and SBOM guidance
@@ -438,6 +495,7 @@ Additional lightweight project/process docs live under `docs/`:
 ## Current limitations
 
 - `inspect` is lightweight but now reports version, blob readiness, property count, and outgoing relation count
+- there is no built-in full archive integrity scrubber / `fsck` yet; use the backup/restore guidance in `docs/ARCHIVE_INTEGRITY_AND_RECOVERY.md`
 - `relations` currently reports outgoing relations only
 - batch commands fail fast on first invalid item
 - readonly symlink behavior still needs validation on Windows environments
