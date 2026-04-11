@@ -269,7 +269,7 @@ Docmasys import --archive ./demo-archive --root ./demo-src
 Docmasys inspect --archive ./demo-archive
 ```
 
-`inspect` now prints tab-separated columns:
+`inspect` now prints tab-separated columns suitable for quick reports and shell piping:
 
 ```text
 path    version blob    properties      outgoing_relations
