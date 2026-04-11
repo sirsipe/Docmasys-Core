@@ -72,7 +72,7 @@ namespace Docmasys::DB
 
   private:
     Database(const std::filesystem::path &databaseFile, const std::filesystem::path &localVaultRoot);
-    void ExecSQL(const char *sql); void OpenTransaction(); void Commit(); void Rollback(); void EnsureSchema(); void MigrateLegacySchemaIfNeeded(); void MigrateSchemaIfNeeded();
+    void ExecSQL(const char *sql); void OpenTransaction(); void Commit(); void Rollback(); void EnsureSchema(); void MigrateSchemaIfNeeded(int version);
     std::shared_ptr<Blob> GetBlobByHashOrId(const std::optional<ID> &id, const std::optional<Identity> &blobHash);
     std::shared_ptr<Folder> GetOrCreateFolder(const std::string &name, const std::shared_ptr<Folder> &parent);
     std::shared_ptr<Blob> GetOrCreateBlob(const Identity &blobHash);

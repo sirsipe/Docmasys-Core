@@ -136,23 +136,15 @@ TEST(DB, VersionPropertiesAreTypedAndCaseInsensitive)
   EXPECT_FALSE(db->GetVersionProperty(version, "title").has_value());
 }
 
-TEST(DB, LegacySchemaIsMigrated)
+TEST(DB, UnsupportedNewerSchemaVersionIsRejected)
 {
   TempDir td;
   const auto dbPath = td.dir / "content.db";
   sqlite3 *raw = nullptr;
   ASSERT_EQ(sqlite3_open(dbPath.string().c_str(), &raw), SQLITE_OK);
-  ASSERT_EQ(sqlite3_exec(raw, DB_SCHEMA_LEGACY, nullptr, nullptr, nullptr), SQLITE_OK);
-  ASSERT_EQ(sqlite3_exec(raw, "INSERT INTO folders(id, parent_id, name) VALUES(1, NULL, 'ROOT');", nullptr, nullptr, nullptr), SQLITE_OK);
-  ASSERT_EQ(sqlite3_exec(raw, "INSERT INTO blobs(id, hash, status) VALUES(1, zeroblob(32), 1);", nullptr, nullptr, nullptr), SQLITE_OK);
-  ASSERT_EQ(sqlite3_exec(raw, "INSERT INTO files(id, parent_id, name, blob_id) VALUES(1, 1, 'legacy.txt', 1);", nullptr, nullptr, nullptr), SQLITE_OK);
+  ASSERT_EQ(sqlite3_exec(raw, DB_SCHEMA, nullptr, nullptr, nullptr), SQLITE_OK);
+  ASSERT_EQ(sqlite3_exec(raw, "PRAGMA user_version = 99;", nullptr, nullptr, nullptr), SQLITE_OK);
   sqlite3_close(raw);
 
-  auto db = Database::Open(dbPath, td.dir / "vault");
-  EXPECT_EQ(ReadUserVersion(dbPath), DB_SCHEMA_VERSION);
-
-  auto file = db->GetFileByRelativePath("ROOT/legacy.txt");
-  auto version = db->GetFileVersion(file, std::nullopt);
-  EXPECT_EQ(version->VersionNumber, 1);
-  EXPECT_EQ(version->BlobId, 1);
+  EXPECT_THROW(Database::Open(dbPath, td.dir / "vault"), std::runtime_error);
 }

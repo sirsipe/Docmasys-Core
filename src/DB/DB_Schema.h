@@ -40,12 +40,7 @@ namespace Docmasys::DB
     WorkspaceEntryState State{WorkspaceEntryState::Ok};
   };
 
-  static constexpr int DB_SCHEMA_VERSION = 3;
-  inline constexpr const char DB_SCHEMA_LEGACY[] = R"SQL(
-    CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, hash BLOB NOT NULL CHECK (length(hash) = 32), status INT NOT NULL CHECK (status IN (0,1)), UNIQUE(hash));
-    CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE);
-    CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL COLLATE NOCASE, blob_id INTEGER NOT NULL REFERENCES blobs(id) ON DELETE RESTRICT, UNIQUE(parent_id, name));
-  )SQL";
+  static constexpr int DB_SCHEMA_VERSION = 1;
   inline constexpr const char DB_SCHEMA[] = R"SQL(
     CREATE TABLE IF NOT EXISTS blobs (id INTEGER PRIMARY KEY, hash BLOB NOT NULL CHECK (length(hash) = 32), status INT NOT NULL CHECK (status IN (0,1)), UNIQUE(hash));
     CREATE INDEX IF NOT EXISTS idx_blobs ON blobs(hash);
