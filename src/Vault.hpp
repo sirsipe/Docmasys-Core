@@ -47,7 +47,7 @@ namespace Docmasys
 
   private:
     void MaterializeFiles(const std::vector<DB::MaterializedFile> &files, DB::MaterializationKind kind);
-    void MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const std::filesystem::path &localFolder, DB::MaterializationKind kind);
+    void MaterializeFolderTree(const DB::Folder &folder, const std::filesystem::path &localFolder, DB::MaterializationKind kind);
 
     std::unique_ptr<DB::Database> m_Database;
     const std::filesystem::path m_LocalRoot;

@@ -121,19 +121,20 @@ void Vault::MaterializeFiles(const std::vector<DB::MaterializedFile> &files, DB:
   }
 }
 
-void Vault::MaterializeFolderTree(const std::shared_ptr<DB::Folder> &folder, const fs::path &localFolder, DB::MaterializationKind kind)
+void Vault::MaterializeFolderTree(const DB::Folder &folder, const fs::path &localFolder, DB::MaterializationKind kind)
 {
   fs::create_directories(localFolder);
-  MaterializeFiles(m_Database->GetMaterializedFiles(folder), kind);
-  for (const auto &subfolder : m_Database->GetFolders(folder))
-    MaterializeFolderTree(subfolder, localFolder / subfolder->Name, kind);
+  const auto folderRef = std::make_shared<DB::Folder>(folder);
+  MaterializeFiles(m_Database->GetMaterializedFiles(folderRef), kind);
+  for (const auto &subfolder : m_Database->GetFolders(folderRef))
+    MaterializeFolderTree(*subfolder, localFolder / subfolder->Name, kind);
 }
 
 void Vault::Pop()
 {
   for (const auto &rootFolder : m_Database->GetFolders(nullptr))
     if (rootFolder->Name == "ROOT")
-      MaterializeFolderTree(rootFolder, m_LocalRoot, DB::MaterializationKind::ReadOnlyCopy);
+      MaterializeFolderTree(*rootFolder, m_LocalRoot, DB::MaterializationKind::ReadOnlyCopy);
 }
 
 void Vault::Pop(const MaterializationOptions &options)
