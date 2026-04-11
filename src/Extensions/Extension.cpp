@@ -79,14 +79,17 @@ void ImportedVersionContext::SetProperty(const std::string &name, const Property
   Database.SetVersionProperty(Version, name, value);
 }
 
-ImportExtensionRegistry::ImportExtensionRegistry(std::vector<std::shared_ptr<ImportExtension>> extensions)
+ImportExtensionRegistry::ImportExtensionRegistry(std::vector<std::unique_ptr<ImportExtension>> extensions)
     : m_Extensions(std::move(extensions))
 {
 }
 
 ImportExtensionRegistry ImportExtensionRegistry::BuiltIn()
 {
-  return ImportExtensionRegistry({std::make_shared<FileFactsExtension>(), std::make_shared<RelationManifestExtension>()});
+  std::vector<std::unique_ptr<ImportExtension>> extensions;
+  extensions.push_back(std::make_unique<FileFactsExtension>());
+  extensions.push_back(std::make_unique<RelationManifestExtension>());
+  return ImportExtensionRegistry(std::move(extensions));
 }
 
 void ImportExtensionRegistry::Run(const ImportedVersionContext &context) const

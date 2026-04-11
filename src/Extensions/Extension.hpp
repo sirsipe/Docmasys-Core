@@ -35,7 +35,7 @@ namespace Docmasys::Extensions
     void Run(const ImportedVersionContext &context) const;
 
   private:
-    std::vector<std::shared_ptr<ImportExtension>> m_Extensions;
-    explicit ImportExtensionRegistry(std::vector<std::shared_ptr<ImportExtension>> extensions);
+    std::vector<std::unique_ptr<ImportExtension>> m_Extensions;
+    explicit ImportExtensionRegistry(std::vector<std::unique_ptr<ImportExtension>> extensions);
   };
 }
